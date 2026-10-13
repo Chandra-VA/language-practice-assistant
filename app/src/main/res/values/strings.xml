@@ -1,7 +1,7 @@
 <resources>
     <string name="ai_endpoint_key_changed">接口域名或端口已改变，请重新输入对应密钥；无需密钥时请先清除旧密钥。</string>
-    <string name="app_name">极速配词助手</string>
-    <string name="title">极速配词助手</string>
+    <string name="app_name">语言练习助手</string>
+    <string name="title">语言练习助手</string>
     <string name="subtitle">4.1.0 测试版：按题型自动答题，正确答案本地记忆；听力和口语可自动跳过。</string>
     <string name="privacy_note">学习和本地配对在手机上完成。自动模式的画面只用于确认词卡状态，不保存、不上传；可随时停止共享。开启大模型补词或点击测试接口时，会向所填 HTTPS 接口发送词语，或当前受支持题目的题干、指令、文字选项与输入框数量；密钥在本机加密保存。</string>
     <string name="mode_title">选择运行模式</string>
@@ -64,7 +64,7 @@
     <string name="stop_assist">停止辅助</string>
     <string name="import_words">导入双语词库 CSV</string>
     <string name="usage_title">使用方法</string>
-    <string name="usage_body">1. 选择学习或自动模式，在系统设置中开启“多邻国节点极速高亮”无障碍服务。若开关被禁用，请先在应用信息允许“受限设置”。\n2. 在“自动答题题型开关”中勾选题型并保存。学习模式只记录手动答对的题，不自动点击或暂停。\n3. 自动模式优先使用本地词库。Android 11+ 按系统提示共享整个屏幕可加速确认；拒绝或停止共享仍能继续自动答题。\n4. 大模型默认关闭；配置并开启后回答陌生题。限时陌生题尝试暂停等待。听力和口语有对应按钮时自动跳过。\n5. 同一组词卡保持固定高亮。悬浮球可切换“学习 / 自动 / 关闭”；模型无法解决且没有可配词对时，点橙色“!”接管。\n6. 正确答案会本地记忆，可在词库、整句和其他题型三个列表查看或删除；未支持的布局等待手动操作。</string>
+    <string name="usage_body">1. 选择学习或自动模式，在系统设置中开启“语言练习助手”无障碍服务。若开关被禁用，请先在应用信息允许“受限设置”。\n2. 在“自动答题题型开关”中勾选题型并保存。学习模式只记录手动答对的题，不自动点击或暂停。\n3. 自动模式优先使用本地词库。Android 11+ 按系统提示共享整个屏幕可加速确认；拒绝或停止共享仍能继续自动答题。\n4. 大模型默认关闭；配置并开启后回答陌生题。限时陌生题尝试暂停等待。听力和口语有对应按钮时自动跳过。\n5. 同一组词卡保持固定高亮。悬浮球可切换“学习 / 自动 / 关闭”；模型无法解决且没有可配词对时，点橙色“!”接管。\n6. 正确答案会本地记忆，可在词库、整句和其他题型三个列表查看或删除；未支持的布局等待手动操作。</string>
     <string name="status_ready">尚未启动</string>
     <string name="status_learning_running">学习模式正在运行：只记录用户操作</string>
     <string name="status_auto_running">自动模式正在运行：本地词库优先</string>
@@ -96,8 +96,8 @@
     <string name="pair_deleted">词对已删除</string>
     <string name="pair_delete_failed">删除失败，请稍后重试</string>
     <string name="close">关闭</string>
-    <string name="node_permission_missing">需要开启“多邻国节点极速高亮”无障碍服务</string>
-    <string name="node_service_name">多邻国节点极速高亮</string>
+    <string name="node_permission_missing">需要开启“语言练习助手”无障碍服务</string>
+    <string name="node_service_name">语言练习助手</string>
     <string name="node_service_description">仅在用户选择模式且多邻国位于前台时读取可访问文字和位置。学习模式只记录用户正确操作；自动模式自动点击和暂停，并在支持的设备上临时读取词卡颜色确认状态，不保存或上传画面。用户另行开启大模型补词后，才会向所填接口发送当前未知词，或受支持题目的题干、指令、词块及文字选项和输入框数量。</string>
     <string name="sentence_memory_title">查看已学整句</string>
     <string name="sentence_memory_count">查看已学整句（%1$d）</string>

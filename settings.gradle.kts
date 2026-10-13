@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "WordMatchAssist"
+rootProject.name = "LanguagePracticeAssistant"
 include(":app")

@@ -171,7 +171,7 @@ public final class MainActivity extends Activity {
             waitingForAccessibilityPermission = true;
             Toast.makeText(
                     this,
-                    "请开启“多邻国节点极速高亮”；若开关被禁用，请先在应用信息中允许受限设置",
+                    "请开启“语言练习助手”；若开关被禁用，请先在应用信息中允许受限设置",
                     Toast.LENGTH_LONG
             ).show();
             startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));

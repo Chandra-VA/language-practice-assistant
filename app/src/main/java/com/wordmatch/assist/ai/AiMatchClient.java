@@ -178,7 +178,7 @@ public final class AiMatchClient {
             connection.setDoOutput(true);
             connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
             connection.setRequestProperty("Accept", "application/json");
-            connection.setRequestProperty("User-Agent", "WordMatchAssist/4.1.0");
+            connection.setRequestProperty("User-Agent", "LanguagePracticeAssistant/4.1.0");
             if (settings.hasApiKey()) {
                 connection.setRequestProperty("Authorization", "Bearer " + settings.getApiKey());
             }
