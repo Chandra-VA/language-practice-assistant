@@ -5,7 +5,8 @@ import com.wordmatch.assist.model.WordBox;
 /** Samples the card background on both sides of its text, not the colored word badge. */
 public final class GreenCardDetector {
     private static final float[] X = {0.12f, 0.22f, 0.78f, 0.88f};
-    private static final float[] Y = {0.30f, 0.50f, 0.70f};
+    // Above/below the text band, including wide multi-word labels.
+    private static final float[] Y = {0.18f, 0.25f, 0.82f};
 
     private GreenCardDetector() {}
 

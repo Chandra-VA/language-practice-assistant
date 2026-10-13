@@ -22,4 +22,16 @@ public final class FreshGreenFramesTest {
         frames.reset();
         assertFalse(frames.observe(1, true, 448));
     }
+    @Test public void firstClickCanDiscardTheStaleFrameWithoutCreditingPrePartnerColors() {
+        FreshGreenFrames frames = new FreshGreenFrames();
+        assertFalse(frames.observe(5, false, 100)); // First click: never inspect green yet.
+        assertFalse(frames.observe(5, false, 120)); // Partner has not settled.
+        assertFalse(frames.observe(5, true, 160));
+        assertFalse(frames.observe(5, true, 175));
+        assertTrue(frames.observe(5, true, 176));
+        assertFalse(frames.observe(6, true, 192)); // No early frame: still discard first green.
+        assertFalse(frames.observe(6, true, 208));
+        assertTrue(frames.observe(6, true, 224));
+    }
+
 }

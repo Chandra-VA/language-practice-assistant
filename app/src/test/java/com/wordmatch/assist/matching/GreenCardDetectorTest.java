@@ -10,7 +10,7 @@ import static org.junit.Assert.*;
 public final class GreenCardDetectorTest {
     private static final WordBox CARD = new WordBox("", 0, 0, 100, 100);
 
-    @Test public void replaysActualPauseBlueSelectionGreenSuccessAndFadingFrames() throws Exception {
+    @Test public void replaysRecordedColorSetsIndependentlyOfSamplePlacement() throws Exception {
         int count = 0;
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(
                 getClass().getResourceAsStream("/green_card_recording_samples.csv"), StandardCharsets.UTF_8))) {
@@ -56,7 +56,19 @@ public final class GreenCardDetectorTest {
         WordBox shifted = new WordBox("", 37, 81, 411, 147);
         int[][] shiftedPoints = GreenCardDetector.samplePoints(shifted);
         assertEquals(37 + (int) (374 * .12f), shiftedPoints[0][0]);
-        assertEquals(81 + (int) (66 * .30f), shiftedPoints[0][1]);
+        assertEquals(81 + (int) (66 * .18f), shiftedPoints[0][1]);
+    }
+
+    @Test public void wideDarkTextDoesNotObscureGreenOrWhiteBackgroundSamples() {
+        WordBox card = new WordBox("", 0, 0, 466, 189);
+        WordBox label = new WordBox("payment method", 56, 60, 408, 132);
+        GreenCardDetector.Pixels greenWithText = (x,y) -> y >= 60 && y <= 132 && x >= 56 && x <= 408
+                ? 0xff4c7500 : 0xffd8febb;
+        assertTrue(GreenCardDetector.isGreenCard(greenWithText, 466, 189, card));
+        GreenCardDetector.Pixels whiteWithGreyText = (x,y) -> y >= 60 && y <= 132 && x >= 56 && x <= 408
+                ? 0xffe5e5e5 : 0xffffffff;
+        assertEquals(CardVisualState.State.FADED, CardVisualState.read(whiteWithGreyText,466,189,card,label));
+        assertFalse(GreenCardDetector.isGreenCard(whiteWithGreyText,466,189,card));
     }
 
     private static boolean isSample(int[][] points, int x, int y) {
@@ -66,9 +78,11 @@ public final class GreenCardDetectorTest {
 
     private static boolean sampledCard(String[] fields, int offset) {
         return GreenCardDetector.isGreenCard((x, y) -> {
-            int column = x < 20 ? 0 : x < 50 ? 1 : x < 85 ? 2 : 3;
-            int row = y < 40 ? 0 : y < 60 ? 1 : 2;
-            return (int) Long.parseLong(fields[offset + column * 3 + row], 16);
+            // Recorded colors still test the classifier, not coordinates from the old grid.
+            int[][] points = GreenCardDetector.samplePoints(CARD);
+            for (int i = 0; i < points.length; i++) if (points[i][0] == x && points[i][1] == y)
+                return (int) Long.parseLong(fields[offset + i], 16);
+            throw new AssertionError("Unexpected sample");
         }, 100, 100, CARD);
     }
 }

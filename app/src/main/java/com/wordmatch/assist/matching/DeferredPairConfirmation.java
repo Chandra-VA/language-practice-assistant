@@ -11,6 +11,7 @@ public final class DeferredPairConfirmation {
     public final long clickedAt;
     private final AutoPairConfirmation disappearance = new AutoPairConfirmation();
     private final FadedPairConfirmation faded = new FadedPairConfirmation();
+    private final ReplacementPairConfirmation replacements = new ReplacementPairConfirmation();
     private final FreshGreenFrames greens = new FreshGreenFrames();
 
     public DeferredPairConfirmation(MatchPair pair, WordBox firstCard, WordBox secondCard,
@@ -40,7 +41,15 @@ public final class DeferredPairConfirmation {
                 peerOrSubmittedBoard, true, clickedAt, now);
         return (green && screenshot) || greenConfirmed || fadedConfirmed;
     }
+    public boolean observeReplacement(List<WordBox> words, WordBox currentFirst, WordBox currentSecond,
+                                      boolean firstInactive, boolean secondInactive,
+                                      CardVisualState.State first, CardVisualState.State second,
+                                      boolean completeUnselected, long now) {
+        return replacements.observe(words, pair.getFirst(), firstCard, currentFirst,
+                pair.getSecond(), secondCard, currentSecond, firstInactive, secondInactive,
+                first, second, true, completeUnselected, clickedAt, now);
+    }
     public void resetObservations(long now) {
-        greens.reset(); faded.reset(); disappearance.observe(null, false, now);
+        greens.reset(); faded.reset(); replacements.reset(); disappearance.observe(null, false, now);
     }
 }

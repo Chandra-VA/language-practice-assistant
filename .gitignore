@@ -34,6 +34,8 @@ learned_vocabulary.tsv
 manual_vocabulary.tsv
 ai_vocabulary.tsv
 user_vocabulary.csv
+verified_sentences.json*
+verified_exercises.json*
 
 # Machine, assistant, cloud credentials and recordings
 .codex/

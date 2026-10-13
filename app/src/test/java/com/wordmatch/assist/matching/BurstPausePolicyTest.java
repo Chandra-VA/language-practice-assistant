@@ -26,4 +26,16 @@ public final class BurstPausePolicyTest {
         assertFalse(BurstPausePolicy.shouldPauseForReplacementWords(2, 1));
         assertFalse(BurstPausePolicy.shouldPauseForReplacementWords(2, 2));
     }
+    @Test
+    public void readyReplacementBatchDoesNotPayAnotherPause() {
+        assertFalse(BurstPausePolicy.shouldPauseForReplacementWords(10, 2, true));
+        assertFalse(BurstPausePolicy.shouldPauseForReplacementWords(10, 5, true));
+    }
+
+    @Test
+    public void greyOrUnknownReplacementCardsStillNeedAPause() {
+        assertTrue(BurstPausePolicy.shouldPauseForReplacementWords(10, 2, false));
+        assertFalse(BurstPausePolicy.shouldPauseForReplacementWords(2, 1, false));
+        assertFalse(BurstPausePolicy.shouldPauseForReplacementWords(10, 0, false));
+    }
 }

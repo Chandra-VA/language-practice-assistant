@@ -12,6 +12,15 @@ public final class ConfirmationPollTiming {
         return hasLiveFrames(running, frameAt, now) ? 96L : 16L;
     }
 
+    /** Briefly observe dispatch acceptance while an independent queued pair can use the lane. */
+    public static long dispatchPollDelay(boolean running, long frameAt, long now,
+                                         boolean followingPairQueued, long secondClickAt) {
+        long normal = nodePollDelay(running, frameAt, now);
+        if (followingPairQueued && secondClickAt > 0 && now >= secondClickAt
+                && now - secondClickAt < 160L) return Math.min(32L, normal);
+        return normal;
+    }
+
     public static boolean needsScreenshotBackup(boolean running, long frameAt, long clickedAt, long now) {
         return !hasLiveFrames(running, frameAt, now) || clickedAt <= 0 || now - clickedAt >= 240L;
     }

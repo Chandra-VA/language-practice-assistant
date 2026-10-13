@@ -87,6 +87,19 @@ public final class StablePairHighlightsTest {
         assertLabel(after, movedB, 2);
     }
 
+    @Test public void incomingDuplicatesDoNotInheritMissingGreyCardsLabel() {
+        StablePairHighlights labels = new StablePairHighlights();
+        labels.update(words(a), Collections.singletonList(a), true);
+        MatchPair newer = pair("苹果", "apple", 600);
+        MatchPair newest = pair("苹果", "apple", 900);
+        List<WordBox> board = words(newer, newest);
+        board.add(a.getSecond()); // Only the old grey English card survives.
+        List<StablePairHighlights.Tile> after = labels.update(board, Arrays.asList(newer, newest), true);
+        assertEquals(1, label(after, a.getSecond()));
+        assertLabel(after, newer, 2);
+        assertLabel(after, newest, 3);
+    }
+
     private static MatchPair pair(String left, String right, int top) {
         return new MatchPair(new WordBox(left, 150, top, 250, top + 40),
                 new WordBox(right, 650, top, 750, top + 40), 1.0, 1);

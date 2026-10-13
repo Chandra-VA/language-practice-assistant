@@ -29,6 +29,11 @@ import android.view.accessibility.AccessibilityWindowInfo;
 import android.widget.Toast;
 
 import com.wordmatch.assist.R;
+import com.wordmatch.assist.exercise.*;
+import com.wordmatch.assist.sentence.SentencePlan;
+import com.wordmatch.assist.sentence.SentenceController;
+import com.wordmatch.assist.sentence.SentencePage;
+import com.wordmatch.assist.sentence.SentenceReader;
 import com.wordmatch.assist.MainActivity;
 import com.wordmatch.assist.ai.AiMatchClient;
 import com.wordmatch.assist.ai.AiMatchSettings;
@@ -36,6 +41,7 @@ import com.wordmatch.assist.ai.AiPairValidator;
 import com.wordmatch.assist.ai.AiBoardRequest;
 import com.wordmatch.assist.ai.AiLookupPlan;
 import com.wordmatch.assist.ai.AiFailureRecheck;
+import com.wordmatch.assist.ai.AiVocabularyAdmission;
 import com.wordmatch.assist.capture.FastCaptureService;
 import com.wordmatch.assist.matching.GreenCardDetector;
 import com.wordmatch.assist.matching.FreshGreenFrames;
@@ -53,6 +59,8 @@ import com.wordmatch.assist.matching.VisualPairRetry;
 import com.wordmatch.assist.matching.SelectedPairPlanner;
 import com.wordmatch.assist.matching.SecondClickTiming;
 import com.wordmatch.assist.matching.BurstPausePolicy;
+import com.wordmatch.assist.matching.ReplacementBatchWindow;
+import com.wordmatch.assist.matching.ReplacementPairConfirmation;
 import com.wordmatch.assist.matching.SlowProgressPause;
 import com.wordmatch.assist.matching.DispatchAcceptance;
 import com.wordmatch.assist.matching.SubmittedBoardEvidence;
@@ -82,6 +90,11 @@ import java.util.concurrent.Future;
 
 /** Event-driven, no-OCR highlighter that reads Duolingo's accessibility node tree. */
 public final class DuolingoNodeService extends AccessibilityService {
+    private SentenceController sentences;
+    private ExerciseController exercises;
+    private boolean sentenceVisible;
+    private ExerciseType sentenceType = ExerciseType.TRANSLATE_EN_ZH;
+    private final SentenceReader sentenceReader = new SentenceReader();
     private static boolean automaticStartRequested;
 
     /** Consume a user's overlay selection; an external activity intent cannot select a mode. */
@@ -202,6 +215,9 @@ public final class DuolingoNodeService extends AccessibilityService {
     private long lastFastFrameAt;
     private long lastMismatchedFrameAt;
     private String lastConfirmationSource = "";
+    private String lastPixelStates = "none";
+    private final ReplacementPairConfirmation replacementPairConfirmation = new ReplacementPairConfirmation();
+    private final ReplacementBatchWindow replacementBatchWindow = new ReplacementBatchWindow();
     private final VisualPairRetry visualPairRetry = new VisualPairRetry();
     private List<WordBox> recoverySampleCards = Collections.emptyList();
     private long recoverySamplesPreparedAt;
@@ -295,7 +311,7 @@ public final class DuolingoNodeService extends AccessibilityService {
         public void run() {
             if (!burstActive
                     || !isAssistEnabled(DuolingoNodeService.this)
-                    || !isAutoModeEnabled(DuolingoNodeService.this)) {
+                    || !isPairAutomationEnabled(DuolingoNodeService.this)) {
                 return;
             }
             long now = SystemClock.uptimeMillis();
@@ -321,13 +337,14 @@ public final class DuolingoNodeService extends AccessibilityService {
                     || !autoSecondClickIssued
                     || freezeActive
                     || !isAssistEnabled(DuolingoNodeService.this)
-                    || !isAutoModeEnabled(DuolingoNodeService.this)) {
+                    || !isPairAutomationEnabled(DuolingoNodeService.this)) {
                 return;
             }
             scheduleRefresh();
             autoConfirmPollScheduled = true;
-            handler.postDelayed(this, ConfirmationPollTiming.nodePollDelay(
-                    FastCaptureService.isRunning(), lastFastFrameAt, SystemClock.uptimeMillis()));
+            handler.postDelayed(this, ConfirmationPollTiming.dispatchPollDelay(
+                    FastCaptureService.isRunning(), lastFastFrameAt, SystemClock.uptimeMillis(),
+                    burstActive && !burstQueue.isEmpty() && deferredPairs.size() < 5, autoSecondClickAt));
         }
     };
     private final Runnable userTakeoverEndRunnable = new Runnable() {
@@ -437,6 +454,8 @@ public final class DuolingoNodeService extends AccessibilityService {
         DuolingoNodeService service = connectedInstance;
         if (service != null) {
             service.handler.post(() -> {
+                if (service.sentences != null) service.sentences.modeChanged();
+                if (service.exercises != null) service.exercises.modeChanged();
                 if (enabled) {
                     service.slowProgressPause.reset();
                     service.confirmationPace.reset();
@@ -471,12 +490,30 @@ public final class DuolingoNodeService extends AccessibilityService {
         });
     }
 
+    private static boolean isPairAutomationEnabled(Context context) {
+        return isAutoModeEnabled(context) && ExerciseSettings.enabled(context, ExerciseType.MATCH);
+    }
+
+    public static void onExerciseSettingsChanged() {
+        DuolingoNodeService service = connectedInstance;
+        if (service == null) return;
+        service.handler.post(() -> {
+            if (service.sentences != null) service.sentences.reset();
+            if (service.exercises != null) service.exercises.reset();
+            service.handleNonMatchingPage();
+            service.cancelFreezeAndDismiss();
+            service.scheduleRefresh();
+        });
+    }
+
     public static void onAiSettingsChanged() {
         DuolingoNodeService service = connectedInstance;
         if (service == null) {
             return;
         }
         service.handler.post(() -> {
+            if (service.sentences != null) service.sentences.reset();
+            if (service.exercises != null) service.exercises.reset();
             if (!AiMatchSettings.isEnabled(service)) {
                 service.cancelAiLookup();
                 if (service.freezeActive) {
@@ -504,6 +541,19 @@ public final class DuolingoNodeService extends AccessibilityService {
         );
         vocabulary = new VocabularyStore(this);
         matcher = new PairMatcher(vocabulary);
+        sentences = new SentenceController(this, handler, new SentenceController.Host() {
+            public void status(String text, boolean warning) {
+                if (overlay != null) overlay.showStatus(text, warning
+                        ? MatchOverlayView.STATUS_WARNING : MatchOverlayView.STATUS_WORKING);
+            }
+            public void refresh() { scheduleRefresh(); }
+        });
+        exercises = new ExerciseController(this, handler, new SentenceController.Host() {
+            public void status(String text, boolean warning) {
+                if (overlay != null) overlay.showStatus(text, warning ? MatchOverlayView.STATUS_WARNING : MatchOverlayView.STATUS_WORKING);
+            }
+            public void refresh() { scheduleRefresh(); }
+        });
         applyEnabledState(isAssistEnabled(this));
     }
 
@@ -531,6 +581,9 @@ public final class DuolingoNodeService extends AccessibilityService {
         screenWidth = metrics.widthPixels;
         screenHeight = metrics.heightPixels;
         if (hadDimensions) {
+            if (sentences != null) sentences.reset();
+            if (exercises != null) exercises.reset();
+            sentenceVisible = false;
             cancelFullScreenPeek();
             cancelBurstQueue();
             cancelAutoClickSequence(false);
@@ -557,8 +610,10 @@ public final class DuolingoNodeService extends AccessibilityService {
     }
 
     private AccessibilityWordExtractor.Extraction readPage(AccessibilityNodeInfo root, int width, int height) {
+        long scanStarted = SystemClock.uptimeMillis();
         AccessibilityWordExtractor.Extraction page = AccessibilityWordExtractor.extractPage(root, width, height);
-        if (!isAutoModeEnabled(this) || !isAssistEnabled(this) || !page.isMatchingExercise()
+        traceDuration("scan", scanStarted);
+        if (!isPairAutomationEnabled(this) || !isAssistEnabled(this) || !page.isMatchingExercise()
                 || page.isPauseConfirmationVisible() || page.isNodeLimitReached()) {
             visualBoardSelection.reset();
             return page;
@@ -591,6 +646,8 @@ public final class DuolingoNodeService extends AccessibilityService {
                 && event.getPackageName() != null
                 && DUOLINGO_PACKAGE.contentEquals(event.getPackageName())) {
             int eventType = event.getEventType();
+            if (sentenceVisible && sentences != null) sentences.observeClick(event);
+            if (!sentenceVisible && exercises != null) exercises.observeClick(event);
             if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
                     || eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
                 if (SystemClock.uptimeMillis() >= pauseTransitionGuardUntil) {
@@ -606,7 +663,7 @@ public final class DuolingoNodeService extends AccessibilityService {
                     beginManualTakeover();
                 }
             }
-            if (!burstActive && !autoClickBusy && !freezeRequestPending) {
+            if (!sentenceVisible && !burstActive && !autoClickBusy && !freezeRequestPending) {
                 startAnimationPolling();
             }
         }
@@ -624,6 +681,9 @@ public final class DuolingoNodeService extends AccessibilityService {
 
     @Override
     public void onInterrupt() {
+        if (sentences != null) sentences.reset();
+        if (exercises != null) exercises.reset();
+        sentenceVisible = false;
         matchingExerciseVisible = false;
         cancelFullScreenPeek();
         cancelBurstQueue();
@@ -635,6 +695,9 @@ public final class DuolingoNodeService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
+        if (connectedInstance == this) connectedInstance = null;
+        if (sentences != null) sentences.close();
+        if (exercises != null) exercises.close();
         matchingExerciseVisible = false;
         cancelFullScreenPeek();
         cancelBurstQueue();
@@ -656,6 +719,9 @@ public final class DuolingoNodeService extends AccessibilityService {
     }
 
     private void applyEnabledState(boolean enabled) {
+        if (sentences != null) sentences.reset();
+        if (exercises != null) exercises.reset();
+        sentenceVisible = false;
         if (enabled) {
             scheduleRefresh();
         } else {
@@ -729,6 +795,9 @@ public final class DuolingoNodeService extends AccessibilityService {
         try {
             CharSequence packageName = root.getPackageName();
             if (packageName == null || !DUOLINGO_PACKAGE.contentEquals(packageName)) {
+                if (sentences != null) sentences.reset();
+                if (exercises != null) exercises.reset();
+                sentenceVisible = false;
                 matchingExerciseVisible = false;
                 cancelFullScreenPeek();
                 cancelBurstQueue();
@@ -742,6 +811,30 @@ public final class DuolingoNodeService extends AccessibilityService {
                 return;
             }
             ensureOverlay();
+            if (overlay == null || modeControl == null || !isAssistEnabled(this)) return;
+            List<AccessibilityNodeInfo> sentenceRoots = root.findAccessibilityNodeInfosByViewId("com.duolingo:id/challenge_translate");
+            boolean hasSentenceRoot = sentenceRoots != null && !sentenceRoots.isEmpty();
+            if (sentenceRoots != null) for (AccessibilityNodeInfo node : sentenceRoots) node.recycle();
+            if (sentences != null && (hasSentenceRoot || sentenceVisible)) {
+                SentencePage sentencePage = sentenceReader.read(root, screenWidth, screenHeight);
+                if (sentencePage.recognized || (sentenceVisible && sentencePage.paused)) {
+                    if (!sentenceVisible) {
+                        handleNonMatchingPage();
+                        matchingExerciseVisible = false;
+                        sentenceVisible = true;
+                    }
+                    if (exercises != null) exercises.reset();
+                    if (sentencePage.recognized) sentenceType = SentencePlan.direction(sentencePage.prompt).equals("zh-en")
+                            ? ExerciseType.TRANSLATE_ZH_EN : ExerciseType.TRANSLATE_EN_ZH;
+                    ExerciseType type = sentenceType;
+                    boolean enabled = ExerciseSettings.enabled(this, type);
+                    sentences.handle(root, sentencePage, isAutoModeEnabled(this) && enabled);
+                    if (isAutoModeEnabled(this) && !enabled) overlay.showStatus(type.label + "｜自动答题已关闭", MatchOverlayView.STATUS_WORKING);
+                    return;
+                }
+                if (sentenceVisible && sentences.awaitPauseTransition()) return;
+                sentences.reset(); sentenceVisible = false;
+            }
             long startedAt = SystemClock.elapsedRealtimeNanos();
             AccessibilityWordExtractor.Extraction extraction =
                     readPage(
@@ -749,6 +842,13 @@ public final class DuolingoNodeService extends AccessibilityService {
                             screenWidth,
                             screenHeight
                     );
+            // Only non-pair pages incur a general snapshot; the fast pair loop is unchanged.
+            if (!extraction.isMatchingExercise() || extraction.isPauseConfirmationVisible()) {
+                SentencePage.Node snapshot = sentenceReader.snapshot(root);
+                ExercisePage exercisePage = ExercisePage.parse(snapshot, screenWidth, screenHeight, sentenceReader.truncated());
+                if (exercisePage.recognized) { matchingExerciseVisible = false; handleNonMatchingPage(); }
+                if (exercises != null && exercises.handle(root, exercisePage, isAutoModeEnabled(this))) return;
+            } else if (exercises != null) exercises.reset();
             // A modal can hide the lesson title from the active node tree.
             // Recognize it before treating an absent title as a different page.
             if (extraction.isPauseConfirmationVisible()) {
@@ -760,12 +860,19 @@ public final class DuolingoNodeService extends AccessibilityService {
                 handleNonMatchingPage();
                 return;
             }
+            if (isAutoModeEnabled(this) && !ExerciseSettings.enabled(this, ExerciseType.MATCH)) {
+                handleNonMatchingPage();
+                overlay.showStatus("单词配对｜自动答题已关闭", MatchOverlayView.STATUS_WORKING);
+                return;
+            }
             matchingExerciseVisible = true;
+            if (!matchingSessionConfirmed) tracePerformance("board_entered");
             matchingSessionConfirmed = true;
-            if (isAutoModeEnabled(this)) confirmationPace.start(SystemClock.uptimeMillis());
+            if (isPairAutomationEnabled(this)) confirmationPace.start(SystemClock.uptimeMillis());
             ensureSlowProgressWatch();
             List<WordBox> words = extraction.getWords();
             reconcileDeferredNodes(extraction);
+            slowProgressPause.observeWork(hasPendingProgressWork(extraction), SystemClock.uptimeMillis());
             updatePairHighlights(extraction);
             maybeStartAiLookup(extraction, true);
             if (!extraction.isNodeLimitReached()) {
@@ -838,7 +945,7 @@ public final class DuolingoNodeService extends AccessibilityService {
                         manualLearningStatus(manualTakeoverRemaining),
                         MatchOverlayView.STATUS_WORKING
                 );
-            } else if (!matches.isEmpty() && !isAutoModeEnabled(this)) {
+            } else if (!matches.isEmpty() && !isPairAutomationEnabled(this)) {
                 overlay.showStatus(
                         "学习模式｜已识别 " + matches.size()
                                 + " 对｜等待你的手动操作",
@@ -852,7 +959,7 @@ public final class DuolingoNodeService extends AccessibilityService {
                 );
             } else if (!words.isEmpty()) {
                 overlay.showStatus(
-                        !isAutoModeEnabled(this)
+                        !isPairAutomationEnabled(this)
                                 ? "学习模式｜已读取 " + words.size()
                                         + " 词｜等待你的手动配对"
                                 : (trackingAnimation ? "动画追帧 " : "节点读取 ")
@@ -864,7 +971,7 @@ public final class DuolingoNodeService extends AccessibilityService {
                                                 : "")
                                         + "｜词库 " + vocabulary.size()
                                         + " 对｜" + summarizeWords(words),
-                        isAutoModeEnabled(this)
+                        isPairAutomationEnabled(this)
                                 ? MatchOverlayView.STATUS_WARNING
                                 : MatchOverlayView.STATUS_OK
                 );
@@ -879,7 +986,7 @@ public final class DuolingoNodeService extends AccessibilityService {
                         MatchOverlayView.STATUS_ERROR
                 );
             }
-            if (isAutoModeEnabled(this)
+            if (isPairAutomationEnabled(this)
                     && !autoClickBusy
                     && !freezeActive
                     && !burstActive
@@ -934,7 +1041,7 @@ public final class DuolingoNodeService extends AccessibilityService {
         if (overlay != null) {
             overlay.hideMatches();
         }
-        if (!isAutoModeEnabled(this) || !matchingContext) {
+        if (!isPairAutomationEnabled(this) || !matchingContext) {
             if (overlay != null) {
                 overlay.showStatus("检测到退出确认框｜点“返回”可继续配对", MatchOverlayView.STATUS_WORKING);
             }
@@ -989,7 +1096,7 @@ public final class DuolingoNodeService extends AccessibilityService {
             AccessibilityWordExtractor.Extraction extraction
     ) {
         long now = SystemClock.uptimeMillis();
-        if (!isAssistEnabled(this) || !isAutoModeEnabled(this) || freezeActive
+        if (!isAssistEnabled(this) || !isPairAutomationEnabled(this) || freezeActive
                 || autoClickBusy || now < userTakeoverUntil
                 || manualLearning.hasWork(now, MANUAL_LEARNING_WINDOW_MS)) {
             finalPairResolver.reset();
@@ -998,7 +1105,7 @@ public final class DuolingoNodeService extends AccessibilityService {
         boolean completeBoard = extraction.isMatchingExercise()
                 && !extraction.isNodeLimitReached()
                 && !extraction.isPauseConfirmationVisible();
-        List<WordBox> remaining = wordsWithoutConfirmedPairs(extraction.getWords());
+        List<WordBox> remaining = finalPairWords(extraction);
         if (completeBoard && remaining.size() == 2 && now >= autoRetryBlockedUntil) {
             List<MatchPair> known = executableExactPairs(matcher.match(remaining, screenWidth), extraction);
             SelectedPairPlanner.Plan ready = SelectedPairPlanner.choose(known,
@@ -1051,7 +1158,7 @@ public final class DuolingoNodeService extends AccessibilityService {
     }
 
     private void ensureOverlay() {
-        if (windowManager == null) {
+        if (windowManager == null || connectedInstance != this || !isAssistEnabled(this)) {
             return;
         }
         if (overlay == null) {
@@ -1063,17 +1170,24 @@ public final class DuolingoNodeService extends AccessibilityService {
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                             | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                             | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                            | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
                             | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                     PixelFormat.TRANSLUCENT
             );
             params.gravity = Gravity.TOP | Gravity.START;
             params.alpha = 0.75f;
-            windowManager.addView(overlay, params);
+            try {
+                windowManager.addView(overlay, params);
+            } catch (WindowManager.BadTokenException | WindowManager.InvalidDisplayException error) {
+                stopForOverlayFailure();
+                return;
+            }
         }
         ensureModeControl();
     }
 
     private void handleNonMatchingPage() {
+        if (matchingSessionConfirmed) tracePerformance("board_left");
         stopSlowProgressWatch();
         autoPairRecovery.reset();
         confirmationPace.reset();
@@ -1123,7 +1237,7 @@ public final class DuolingoNodeService extends AccessibilityService {
     }
 
     private void ensureModeControl() {
-        if (modeControl != null || windowManager == null) {
+        if (modeControl != null || windowManager == null || connectedInstance != this || !isAssistEnabled(this)) {
             return;
         }
         modeControl = new ModeControlView(this, new ModeControlView.Listener() {
@@ -1160,7 +1274,19 @@ public final class DuolingoNodeService extends AccessibilityService {
         modeControlParams.x = dp(12);
         modeControlParams.y = dp(92);
         modeControl.getDragHandle().setOnTouchListener(new ModeControlDragListener());
-        windowManager.addView(modeControl, modeControlParams);
+        try {
+            windowManager.addView(modeControl, modeControlParams);
+        } catch (WindowManager.BadTokenException | WindowManager.InvalidDisplayException error) {
+            stopForOverlayFailure();
+        }
+    }
+
+    private void stopForOverlayFailure() {
+        // Android can revoke the accessibility window token before teardown reaches us.
+        // Cancel the current run; never keep clicking without a visible control window.
+        setAssistEnabled(this, false);
+        applyEnabledState(false);
+        android.util.Log.w("WordMatchPerf", "overlay_unavailable assist_stopped=true");
     }
 
     private void switchModeFromOverlay(boolean automatic) {
@@ -1415,6 +1541,7 @@ public final class DuolingoNodeService extends AccessibilityService {
     }
 
     private void beginManualTakeover() {
+        tracePerformance("manual_takeover");
         deferredPairs.clear();
         hasDeferredHistory = false;
         slowProgressPause.reset();
@@ -1534,8 +1661,7 @@ public final class DuolingoNodeService extends AccessibilityService {
 
     private void ensureSlowProgressWatch() {
         if (slowWatchScheduled || !matchingSessionConfirmed || !isAssistEnabled(this)
-                || !isAutoModeEnabled(this) || !isFreezeModeEnabled(this)) return;
-        if (!freezeActive) slowProgressPause.start(SystemClock.uptimeMillis());
+                || !isPairAutomationEnabled(this) || !isFreezeModeEnabled(this)) return;
         slowWatchScheduled = true;
         handler.postDelayed(slowProgressWatchRunnable, 64L);
     }
@@ -1548,18 +1674,36 @@ public final class DuolingoNodeService extends AccessibilityService {
 
     private void watchSlowProgress() {
         slowWatchScheduled = false;
-        if (!matchingSessionConfirmed || !isAssistEnabled(this) || !isAutoModeEnabled(this)
+        if (!matchingSessionConfirmed || !isAssistEnabled(this) || !isPairAutomationEnabled(this)
                 || !isFreezeModeEnabled(this)) { stopSlowProgressWatch(); return; }
         long now = SystemClock.uptimeMillis();
         if (now < userTakeoverUntil || manualLearning.hasWork(now, MANUAL_LEARNING_WINDOW_MS)) {
             slowProgressPause.reset();
         } else if (!freezeActive && !freezeRequestPending && !fullScreenPeekActive && !visualGestureInFlight) {
-            slowProgressPause.start(now);
             SlowProgressPause.Action action = slowProgressPause.action(now);
             if (action != SlowProgressPause.Action.NONE
                     && (!burstActive || now - lastBatchDispatchAt >= slowProgressPause.thresholdMs())) pauseForSlowProgress(action);
         }
         ensureSlowProgressWatch();
+    }
+
+    private boolean hasPendingProgressWork(AccessibilityWordExtractor.Extraction page) {
+        if (autoClickBusy || !deferredPairs.isEmpty()) return true;
+        List<WordBox> remaining = finalPairWords(page);
+        return FinalPairResolver.hasOnlyPair(remaining, screenWidth)
+                || !ExactPairSelector.allExact(matchExecutableBoard(page)).isEmpty();
+    }
+
+    private void traceDuration(String step, long started) {
+        if (android.util.Log.isLoggable("WordMatchPerf", android.util.Log.DEBUG))
+            android.util.Log.d("WordMatchPerf", "step=" + step + " ms=" + (SystemClock.uptimeMillis() - started));
+    }
+
+    private void tracePerformance(String event) {
+        if (android.util.Log.isLoggable("WordMatchPerf", android.util.Log.DEBUG)) {
+            android.util.Log.d("WordMatchPerf", "t=" + SystemClock.uptimeMillis() + " event=" + event
+                    + " pending=" + deferredPairs.size() + " busy=" + autoClickBusy);
+        }
     }
 
     private void pauseForSlowProgress(SlowProgressPause.Action action) {
@@ -1579,10 +1723,58 @@ public final class DuolingoNodeService extends AccessibilityService {
                 slowProgressPause.resumed(SystemClock.uptimeMillis());
                 return;
             }
-            if (!autoClickBusy && FinalPairResolver.hasOnlyPair(wordsWithoutConfirmedPairs(page.getWords()), screenWidth)) {
+            if (!autoClickBusy && FinalPairResolver.hasOnlyPair(finalPairWords(page), screenWidth)) {
                 tryHandleFinalPair(root, page);
                 startAnimationPolling();
                 if (autoClickBusy) return;
+            }
+            if (action == SlowProgressPause.Action.HOLD
+                    || android.util.Log.isLoggable("WordMatchPerf", android.util.Log.DEBUG)) {
+                int priority = action == SlowProgressPause.Action.HOLD ? android.util.Log.WARN : android.util.Log.DEBUG;
+                int active = 0, inactive = 0;
+                for (WordBox word : page.getWords()) {
+                    if (page.hasActiveControl(word)) active++;
+                    if (page.isInactive(word)) inactive++;
+                }
+                android.util.Log.println(priority, "WordMatchPerf", "stall=" + action + " board words=" + page.getWords().size()
+                        + " remaining=" + wordsWithoutConfirmedPairs(page.getWords()).size()
+                        + " active=" + active + " inactive=" + inactive
+                        + " known=" + ExactPairSelector.allExact(matchExecutableBoard(page)).size()
+                        + " ready=" + executableExactPairs(matchExecutableBoard(page), page).size()
+                        + " selected=" + page.getSelectedWords().size() + " issued=" + recentlyIssuedPairs.size()
+                        + " recovery=" + autoPairRecovery.isPending() + " busy=" + autoClickBusy);
+                if (autoClickBusy && autoFirstTarget != null && autoSecondTarget != null) {
+                    android.util.Log.println(priority, "WordMatchPerf", "target slots=" + autoFirstTarget.getCenterY() + "/" + autoSecondTarget.getCenterY()
+                            + " inactive=" + page.isInactive(autoFirstTarget) + "/" + page.isInactive(autoSecondTarget)
+                            + " present=" + sameVisualTarget(page, autoFirstTarget, autoFirstCardBounds, screenWidth)
+                            + "/" + sameVisualTarget(page, autoSecondTarget, autoSecondCardBounds, screenWidth)
+                            + " replaced=" + ReplacementPairConfirmation.replaced(page.getWords(), autoFirstTarget, autoFirstCardBounds, page.getCardBounds(autoFirstTarget, screenWidth))
+                            + "/" + ReplacementPairConfirmation.replaced(page.getWords(), autoSecondTarget, autoSecondCardBounds, page.getCardBounds(autoSecondTarget, screenWidth))
+                            + " pixels=" + lastPixelStates + " initiallyActive=" + autoPairStartedActive);
+                }
+            }
+            if (!hasPendingProgressWork(page)) {
+                slowProgressPause.observeWork(false, SystemClock.uptimeMillis());
+                return;
+            }
+            if (action == SlowProgressPause.Action.RECHECK) {
+                // Pausing alone cannot repair an ignored click. The short watchdog used
+                // to reach HOLD before the 500ms recovery settlement / 6s pair timeout.
+                // Preserve success requirements, but release the stale in-flight pair
+                // into the existing fresh-board + pixel-verified retry path once.
+                slowProgressPause.rechecking(SystemClock.uptimeMillis());
+                tracePerformance("slow_recheck");
+                if (autoClickBusy) {
+                    failActiveAutoPair("暂停恢复后仍未确认消除");
+                } else {
+                    cancelBurstQueue();
+                    cancelPendingFreezeRequest();
+                    if (!autoPairRecovery.isPending()) autoPairRecovery.beginReview(SystemClock.uptimeMillis());
+                    startAnimationPolling();
+                    scheduleRefresh();
+                }
+                if (overlay != null) overlay.showStatus("正在重查词卡并尝试恢复点击", MatchOverlayView.STATUS_WORKING);
+                return;
             }
             wordCount = page.getWords().size();
         } finally { root.recycle(); }
@@ -1591,6 +1783,7 @@ public final class DuolingoNodeService extends AccessibilityService {
             slowProgressPause.retryLater(now);
             return;
         }
+        tracePerformance("slow_pause_" + action.name());
         slowProgressPause.requested();
         slowPauseActive = true;
         slowPauseHolding = action == SlowProgressPause.Action.HOLD;
@@ -1651,6 +1844,10 @@ public final class DuolingoNodeService extends AccessibilityService {
                     AccessibilityWordExtractor.Extraction page = readPage(root, screenWidth, screenHeight);
                     dialogVisible = page.isPauseConfirmationVisible() && !page.isNodeLimitReached();
                     completeLesson = page.isMatchingExercise() && !page.isPauseConfirmationVisible() && !page.isNodeLimitReached();
+                    // The challenge can finish between the fresh scan and Android handling BACK.
+                    // A complete, stable result/entry page ends this pause attempt; do not
+                    // latch freezeActive forever or send another navigation action.
+                    if (finishPauseOnNonMatchingPage(page, now)) return;
                 }
             } finally { root.recycle(); }
         }
@@ -1660,7 +1857,7 @@ public final class DuolingoNodeService extends AccessibilityService {
                 if (overlay != null) overlay.showStatus(slowPauseHolding
                         ? "恢复后仍无进展｜已暂停，等待接管" : "已暂停｜短暂加载后继续复查", MatchOverlayView.STATUS_WORKING);
                 if (slowPauseHolding && modeControl != null) modeControl.showTakeoverPrompt(
-                        "已自动恢复两次，仍未确认配对进展；保持暂停，请接管检查词卡");
+                        "已暂停恢复两次，并重新检查词卡，仍未确认消除；保持暂停，请接管检查");
             }
             if (!slowPauseHolding && now - slowPauseDialogSeenAt >= RECOVERY_PAUSE_LOAD_MS) {
                 finishFreezeAndResume();
@@ -1736,6 +1933,26 @@ public final class DuolingoNodeService extends AccessibilityService {
                 scheduleRefresh();
                 return false;
             }
+            if (aiSignature == null && recoveryPause && !autoClickBusy && !extraction.isNodeLimitReached()) {
+                // A replacement can become ready between queue exhaustion and this delayed BACK.
+                // Revalidate the current active cards before opening an unnecessary pause dialog.
+                List<MatchPair> ready = executableExactPairs(matchExecutableBoard(extraction), extraction);
+                ready.removeIf(pair -> !extraction.hasActiveControl(pair.getFirst())
+                        || !extraction.hasActiveControl(pair.getSecond()));
+                if (SelectedPairPlanner.choose(ready, selectedWordsWithoutConfirmedPairs(extraction.getSelectedWords()),
+                        screenWidth, screenHeight) != null) {
+                    cancelPendingFreezeRequest();
+                    tracePerformance("pause_replaced_by_ready_batch");
+                    startBurstBatch(ready, extraction.getWords().size());
+                    return false;
+                }
+                if (android.util.Log.isLoggable("WordMatchPerf", android.util.Log.DEBUG)) {
+                    android.util.Log.d("WordMatchPerf", "batch words=" + extraction.getWords().size()
+                            + " remaining=" + wordsWithoutConfirmedPairs(extraction.getWords()).size()
+                            + " active=" + extraction.withoutInactiveWords(extraction.getWords()).size()
+                            + " ready=" + ready.size() + " selected=" + extraction.getSelectedWords().size());
+                }
+            }
             if (aiSignature != null) {
                 AiLookupPlan current = planAiLookup(extraction);
                 if (extraction.isNodeLimitReached() || current.hasLocalPairs()
@@ -1761,8 +1978,10 @@ public final class DuolingoNodeService extends AccessibilityService {
         freezeRequestPending = false;
         pendingFreezeRecovery = false;
         freezeActive = true;
+        slowProgressPause.observeNonMatchingPage(false, SystemClock.uptimeMillis());
         freezeDismissPending = false;
         resetFreezeDismissVerification();
+        tracePerformance(aiSignature == null ? "batch_pause" : "ai_pause");
         freezeExpectedWordCount = Math.max(4, expectedWordCount);
         activeFreezeLoadMs = recoveryPause
                 ? RECOVERY_PAUSE_LOAD_MS
@@ -1896,6 +2115,21 @@ public final class DuolingoNodeService extends AccessibilityService {
         }
     }
 
+    private boolean finishPauseOnNonMatchingPage(AccessibilityWordExtractor.Extraction page, long now) {
+        boolean leftLesson = !page.isNodeLimitReached() && !page.isMatchingExercise()
+                && !page.isPauseConfirmationVisible() && page.getWords().isEmpty()
+                && page.getVisitedNodeCount() >= 5;
+        if (!slowProgressPause.observeNonMatchingPage(leftLesson, now)) return false;
+        freezeActive = false;
+        slowPauseActive = slowPauseHolding = freezeDismissPending = false;
+        handler.removeCallbacks(finishFreezeRunnable);
+        handler.removeCallbacks(slowPausePollRunnable);
+        resetFreezeDismissVerification();
+        clearFreezeScanState();
+        handleNonMatchingPage();
+        return true;
+    }
+
     private void verifyFreezeDismissal() {
         if (!freezeActive || !freezeDismissPending || !isAssistEnabled(this)) {
             return;
@@ -1911,6 +2145,7 @@ public final class DuolingoNodeService extends AccessibilityService {
                 if (packageName != null && DUOLINGO_PACKAGE.contentEquals(packageName)) {
                     AccessibilityWordExtractor.Extraction page =
                             readPage(root, screenWidth, screenHeight);
+                    if (finishPauseOnNonMatchingPage(page, now)) return;
                     dialogVisible = page.isPauseConfirmationVisible() || page.isNodeLimitReached();
                     matchingPromptVisible = page.isMatchingExercise();
                     visibleWordCount = page.getWords().size();
@@ -2071,8 +2306,9 @@ public final class DuolingoNodeService extends AccessibilityService {
         freezeDismissPending = false;
         resetFreezeDismissVerification();
         freezeActive = false;
+        tracePerformance("pause_resumed");
         clearFreezeScanState();
-        if (resumeSlowPair && isAutoModeEnabled(this)) {
+        if (resumeSlowPair && isPairAutomationEnabled(this)) {
             pauseTransitionGuardUntil = now + 200L;
             if (modeControl != null) modeControl.setAutomatic(true);
             autoPairRecovery.deferForPause(pausedFor);
@@ -2090,7 +2326,7 @@ public final class DuolingoNodeService extends AccessibilityService {
             ensureSlowProgressWatch();
             return;
         }
-        if (isAutoModeEnabled(this)) {
+        if (isPairAutomationEnabled(this)) {
             beginFullScreenPeek(expectedWordCount);
         } else {
             startAnimationPolling();
@@ -2170,7 +2406,7 @@ public final class DuolingoNodeService extends AccessibilityService {
         int readyWordCount = Math.max(fullScreenPeekWordCount, fullScreenPeekExpectedWordCount);
         clearFullScreenPeekState();
         if (isAssistEnabled(this)
-                && isAutoModeEnabled(this)
+                && isPairAutomationEnabled(this)
                 && SystemClock.uptimeMillis() >= userTakeoverUntil
                 && !readyBatch.isEmpty()) {
             startBurstBatch(readyBatch, readyWordCount);
@@ -2273,7 +2509,7 @@ public final class DuolingoNodeService extends AccessibilityService {
 
     private void tryBeginFreezeAfterClicks() {
         if (!isAssistEnabled(this)
-                || !isAutoModeEnabled(this)
+                || !isPairAutomationEnabled(this)
                 || !isFreezeModeEnabled(this)
                 || freezeActive
                 || burstActive) {
@@ -2376,6 +2612,8 @@ public final class DuolingoNodeService extends AccessibilityService {
         }
         lastBurstProgressAt = SystemClock.uptimeMillis();
         autoFirstClickAt = lastBurstProgressAt;
+        slowProgressPause.observeWork(true, autoFirstClickAt);
+        tracePerformance("first_click");
         if (overlay != null) {
             overlay.showStatus(plan.isFirstAlreadySelected()
                             ? "已有一张选中｜只点击它的搭档"
@@ -2399,7 +2637,7 @@ public final class DuolingoNodeService extends AccessibilityService {
     private void clickAutoSecondTarget() {
         if (freezeActive) return;
         if (!autoClickBusy || autoSecondTarget == null || !isAssistEnabled(this)
-                || !isAutoModeEnabled(this) || freezeActive) {
+                || !isPairAutomationEnabled(this) || freezeActive) {
             cancelAutoClickSequence(false);
             return;
         }
@@ -2468,6 +2706,7 @@ public final class DuolingoNodeService extends AccessibilityService {
                 }
                 autoSecondClickIssued = true;
                 autoSecondClickAt = SystemClock.uptimeMillis();
+                tracePerformance("second_click");
             }
         } finally {
             //noinspection deprecation
@@ -2491,6 +2730,17 @@ public final class DuolingoNodeService extends AccessibilityService {
     private boolean isDeferredWord(WordBox word) {
         for (DeferredPairConfirmation deferred : deferredPairs) if (deferred.contains(word)) return true;
         return false;
+    }
+
+    private List<WordBox> finalPairWords(AccessibilityWordExtractor.Extraction page) {
+        // Inactive grey slots remain in the text tree. They are not remaining answers.
+        // Pending confirmations keep their own lane and must settle before inference.
+        if (!deferredPairs.isEmpty()) return Collections.emptyList();
+        // Count every active card before applying submission history. Otherwise two
+        // unrelated replacements can look like the final pair while their real partners
+        // are still present, hidden only by stale completion records.
+        return FinalPairResolver.unsubmittedFinalPair(page.withoutInactiveWords(page.getWords()),
+                wordsWithoutConfirmedPairs(page.getWords()));
     }
 
     private List<MatchPair> matchExecutableBoard(AccessibilityWordExtractor.Extraction page) {
@@ -2539,6 +2789,7 @@ public final class DuolingoNodeService extends AccessibilityService {
 
     private void commitDeferredPair(DeferredPairConfirmation entry) {
         if (!deferredPairs.remove(entry)) return;
+        tracePerformance("confirmed_deferred");
         confirmationPace.confirmed(SystemClock.uptimeMillis());
         lastConfirmationSource = "";
         rememberIssuedPair(entry.pair.getFirst(), entry.pair.getSecond());
@@ -2576,6 +2827,7 @@ public final class DuolingoNodeService extends AccessibilityService {
                 canConfirmGreenTargets(page, autoFirstCardBounds, autoSecondCardBounds, screenWidth), another, autoSecondClickAt, now);
         if (!stable) return;
         hasDeferredHistory = true;
+        tracePerformance("accepted_deferred");
         deferredPairs.add(new DeferredPairConfirmation(new MatchPair(autoFirstTarget, autoSecondTarget, 1.0, 1),
                 autoFirstCardBounds, autoSecondCardBounds, screenWidth, screenHeight, autoSecondClickAt));
         // Release only the dispatch lane, not success/learning. The old targets stay excluded.
@@ -2610,7 +2862,12 @@ public final class DuolingoNodeService extends AccessibilityService {
                                        CardVisualState.State first, CardVisualState.State second, boolean screenshot, long now) {
         if (!deferredPairs.contains(entry)) return;
         boolean complete = page.isMatchingExercise() && !page.isNodeLimitReached() && !page.isPauseConfirmationVisible()
-                && !targetsSelected(page, entry.pair) && validDeferredGeometry(page, entry);
+                && !targetsSelected(page, entry.pair);
+        if (entry.observeReplacement(page.getWords(), page.getCardBounds(entry.pair.getFirst(), screenWidth),
+                page.getCardBounds(entry.pair.getSecond(), screenWidth), page.isInactive(entry.pair.getFirst()),
+                page.isInactive(entry.pair.getSecond()), first, second,
+                complete && page.getSelectedWords().isEmpty(), now)) { commitDeferredPair(entry); return; }
+        complete &= validDeferredGeometry(page, entry);
         if (entry.observeColors(first, second, page.hasActiveControl(entry.pair.getFirst()), page.hasActiveControl(entry.pair.getSecond()),
                 hasOtherActiveCard(page, entry.pair) || isFullySubmittedInactiveBoard(page), complete, screenshot, now)) commitDeferredPair(entry);
     }
@@ -2624,7 +2881,8 @@ public final class DuolingoNodeService extends AccessibilityService {
             CardVisualState.State first = CardVisualState.read(pixels, width, height, entry.firstCard, entry.pair.getFirst());
             CardVisualState.State second = CardVisualState.read(pixels, width, height, entry.secondCard, entry.pair.getSecond());
             states.add(new CardVisualState.State[]{first, second});
-            evidence |= first == second && (first == CardVisualState.State.GREEN || first == CardVisualState.State.FADED);
+            evidence |= first == CardVisualState.State.GREEN || first == CardVisualState.State.FADED
+                    || second == CardVisualState.State.GREEN || second == CardVisualState.State.FADED;
         }
         if (!evidence) {
             for (DeferredPairConfirmation entry : entries) entry.resetObservations(now);
@@ -2644,7 +2902,7 @@ public final class DuolingoNodeService extends AccessibilityService {
         if (!burstActive
                 || freezeActive
                 || !isAssistEnabled(this)
-                || !isAutoModeEnabled(this)) {
+                || !isPairAutomationEnabled(this)) {
             cancelBurstQueue();
             return;
         }
@@ -2671,12 +2929,7 @@ public final class DuolingoNodeService extends AccessibilityService {
             burstActive = false;
             handler.removeCallbacks(burstPipelineWakeRunnable);
             handler.removeCallbacks(burstWatchdogRunnable);
-            if (isFreezeModeEnabled(this) && BurstPausePolicy.shouldPauseForReplacementWords(burstBoardWordCount, burstDispatchedPairs)) {
-                scheduleFreezeAfterClicks(burstBoardWordCount, true);
-            } else {
-                startAnimationPolling();
-                scheduleRefresh();
-            }
+            finishBurstBatch();
             return;
         }
         AccessibilityNodeInfo root = getCurrentScreenRoot();
@@ -2741,7 +2994,47 @@ public final class DuolingoNodeService extends AccessibilityService {
         }
     }
 
+    /** Start a new snapshot immediately when replacement cards are already ready. */
+    private void finishBurstBatch() {
+        AccessibilityNodeInfo root = getCurrentScreenRoot();
+        if (root == null) { startAnimationPolling(); scheduleRefresh(); return; }
+        try {
+            if (!DUOLINGO_PACKAGE.contentEquals(root.getPackageName() == null ? "" : root.getPackageName())) {
+                handleNonMatchingPage(); return;
+            }
+            AccessibilityWordExtractor.Extraction page = readPage(root, screenWidth, screenHeight);
+            if (page.isPauseConfirmationVisible()) { handleVisiblePauseDialog(page.isMatchingExercise()); return; }
+            if (!page.isMatchingExercise() || page.isNodeLimitReached()) {
+                startAnimationPolling(); scheduleRefresh(); return;
+            }
+            if (tryHandleFinalPair(root, page)) return;
+            reconcileDeferredNodes(page);
+            List<MatchPair> ready = executableExactPairs(matchExecutableBoard(page), page);
+            ready.removeIf(pair -> !page.hasActiveControl(pair.getFirst()) || !page.hasActiveControl(pair.getSecond()));
+            boolean hasReadyPair = SelectedPairPlanner.choose(ready,
+                    selectedWordsWithoutConfirmedPairs(page.getSelectedWords()), screenWidth, screenHeight) != null;
+            boolean needsPause = isFreezeModeEnabled(this) && BurstPausePolicy.shouldPauseForReplacementWords(
+                    burstBoardWordCount, burstDispatchedPairs, hasReadyPair);
+            if (replacementBatchWindow.shouldWait(needsPause, SystemClock.uptimeMillis())) {
+                // Keep the empty batch alive only for this bounded animation window.
+                // Every wake re-reads modal, geometry, selection and active controls.
+                burstActive = true;
+                burstNextEligibleAt = SystemClock.uptimeMillis() + ANIMATION_POLL_INTERVAL_MS;
+                handler.removeCallbacks(burstPipelineWakeRunnable);
+                handler.postDelayed(burstPipelineWakeRunnable, ANIMATION_POLL_INTERVAL_MS);
+            } else if (needsPause) {
+                scheduleFreezeAfterClicks(burstBoardWordCount, true);
+            } else if (hasReadyPair) {
+                tracePerformance("next_ready_batch");
+                startBurstBatch(ready, page.getWords().size());
+            } else {
+                startAnimationPolling(); scheduleRefresh();
+            }
+        } finally { root.recycle(); }
+    }
+
     private void startBurstBatch(List<MatchPair> pairs, int boardWordCount) {
+        replacementBatchWindow.reset();
         if (SystemClock.uptimeMillis() < userTakeoverUntil) {
             handler.removeCallbacks(userTakeoverEndRunnable);
             handler.postDelayed(
@@ -2770,6 +3063,7 @@ public final class DuolingoNodeService extends AccessibilityService {
     }
 
     private void cancelBurstQueue() {
+        replacementBatchWindow.reset();
         handler.removeCallbacks(burstNextRunnable);
         handler.removeCallbacks(burstPipelineWakeRunnable);
         handler.removeCallbacks(burstWatchdogRunnable);
@@ -2794,6 +3088,7 @@ public final class DuolingoNodeService extends AccessibilityService {
                     screenWidth, screenHeight, now, !autoSecondClickIssued);
             if (knownSelectionObserved) autoPairRecovery.reviewObservedSelectionNow(now);
         }
+        tracePerformance("pair_failed");
         autoRecoveryReason = reason;
         cancelAutoClickSequence(false);
         cancelBurstQueue();
@@ -2810,7 +3105,7 @@ public final class DuolingoNodeService extends AccessibilityService {
     /** An unrelated blue card is evidence that waiting on the old pair cannot make progress. */
     private boolean recoverUnexpectedSelection(AccessibilityNodeInfo root, AccessibilityWordExtractor.Extraction page) {
         if (!autoClickBusy || !autoSecondClickIssued || visualGestureInFlight || freezeActive
-                || !isAssistEnabled(this) || !isAutoModeEnabled(this)
+                || !isAssistEnabled(this) || !isPairAutomationEnabled(this)
                 || !page.isMatchingExercise() || page.isPauseConfirmationVisible() || page.isNodeLimitReached()) return false;
         List<WordBox> selected = page.getSelectedWords();
         if (!ActivePairSelectionGuard.isUnexpected(selected, autoFirstTarget, autoSecondTarget)) {
@@ -2836,7 +3131,7 @@ public final class DuolingoNodeService extends AccessibilityService {
             return false;
         }
         long now = SystemClock.uptimeMillis();
-        if (!isAutoModeEnabled(this) || now < userTakeoverUntil
+        if (!isPairAutomationEnabled(this) || now < userTakeoverUntil
                 || manualLearning.hasWork(now, MANUAL_LEARNING_WINDOW_MS)) {
             autoPairRecovery.reset();
             return false;
@@ -2850,7 +3145,7 @@ public final class DuolingoNodeService extends AccessibilityService {
         List<MatchPair> known = ExactPairSelector.allExact(
                 matchExecutableBoard(page));
         MatchPair finalPair = finalPairResolver.observe(
-                wordsWithoutConfirmedPairs(page.getWords()), screenWidth, complete, now);
+                finalPairWords(page), screenWidth, complete, now);
         if (finalPair != null) {
             known = Collections.singletonList(finalPair);
         }
@@ -2880,6 +3175,7 @@ public final class DuolingoNodeService extends AccessibilityService {
             maybeRecoverVisiblePair(root, page);
         }
         if (action == AutoPairRecovery.Action.TAKEOVER) {
+            tracePerformance("recovery_takeover");
             setAutoModeEnabled(this, false);
             setFreezeModeEnabled(this, false);
             if (modeControl != null) {
@@ -2929,11 +3225,12 @@ public final class DuolingoNodeService extends AccessibilityService {
                 SystemClock.uptimeMillis())) {
             return false;
         }
-        completeAutoPair();
+        completeAutoPair("nodes");
         return true;
     }
 
-    private void completeAutoPair() {
+    private void completeAutoPair(String source) {
+        tracePerformance("confirmed_" + source);
         long now = SystemClock.uptimeMillis();
         confirmationPace.confirmed(now);
         slowProgressPause.completed(now, slowPairWasPaused ? 0L : Math.max(0L, now - autoFirstClickAt));
@@ -2959,7 +3256,7 @@ public final class DuolingoNodeService extends AccessibilityService {
 
     private boolean isCurrentVisualPair(int generation, int width, int height) {
         return generation == visualGeneration && autoClickBusy && autoSecondClickIssued
-                && !freezeActive && isAssistEnabled(this) && isAutoModeEnabled(this)
+                && !freezeActive && isAssistEnabled(this) && isPairAutomationEnabled(this)
                 && isGreenConfirmationEnabled() && screenWidth == width && screenHeight == height;
     }
 
@@ -3006,7 +3303,7 @@ public final class DuolingoNodeService extends AccessibilityService {
         if (width == screenWidth && height == screenHeight) lastFastFrameAt = now;
         else lastMismatchedFrameAt = now;
         showAutoConfirmationStatus();
-        if (freezeActive || !isAssistEnabled(this) || !isAutoModeEnabled(this)) {
+        if (freezeActive || !isAssistEnabled(this) || !isPairAutomationEnabled(this)) {
             visualBoardSelection.reset();
             return;
         }
@@ -3025,7 +3322,13 @@ public final class DuolingoNodeService extends AccessibilityService {
         }
         if (!isCurrentVisualPair(visualGeneration, width, height) || autoSecondClickAt == 0L
                 || now - autoSecondClickAt < 32L || autoFirstCardBounds == null || autoSecondCardBounds == null) {
-            fastFrames.reset();
+            // Consume the generation's stale first frame while the first click is
+            // being processed. It cannot contribute green evidence until both
+            // clicks have been issued and their 32ms settlement window has elapsed.
+            if (autoClickBusy && width == screenWidth && height == screenHeight
+                    && autoFirstCardBounds != null && autoSecondCardBounds != null)
+                fastFrames.observe(visualGeneration, false, now);
+            else fastFrames.reset();
             return;
         }
         boolean green = GreenCardDetector.isGreenCard(pixels, width, height, autoFirstCardBounds)
@@ -3037,30 +3340,49 @@ public final class DuolingoNodeService extends AccessibilityService {
         if (!green && !visualGestureInFlight && now - autoSecondClickAt >= 160L) {
             firstState = CardVisualState.read(pixels, width, height, autoFirstCardBounds, autoFirstTarget);
             secondState = CardVisualState.read(pixels, width, height, autoSecondCardBounds, autoSecondTarget);
+            lastPixelStates = firstState + "/" + secondState;
             retry = partialPairRetry.observe(firstState, secondState, autoSecondClickAt, now);
         } else {
             partialPairRetry.clearObservation();
         }
         boolean faded = firstState == CardVisualState.State.FADED && secondState == CardVisualState.State.FADED;
         if (!faded) fadedPairConfirmation.reset();
-        if (!confirmed && !faded && retry == PartialPairRetry.Action.NONE) return;
+        boolean mayHaveReplacement = firstState == CardVisualState.State.FADED || secondState == CardVisualState.State.FADED
+                || firstState == CardVisualState.State.GREEN || secondState == CardVisualState.State.GREEN;
+        if (!confirmed && !faded && !mayHaveReplacement && retry == PartialPairRetry.Action.NONE) {
+            replacementPairConfirmation.reset(); return;
+        }
         AccessibilityNodeInfo root = getCurrentScreenRoot();
         if (root == null) return;
         try {
             if (!DUOLINGO_PACKAGE.contentEquals(root.getPackageName() == null ? "" : root.getPackageName())) return;
             AccessibilityWordExtractor.Extraction page = readPage(root, width, height);
+            if (confirmReplacedPair(page, firstState, secondState, now)) return;
             if (width == screenWidth && height == screenHeight && page.isMatchingExercise()
                     && !page.isPauseConfirmationVisible() && !page.isNodeLimitReached()
                     && (confirmed || faded ? canConfirmGreenTargets(page, autoFirstCardBounds, autoSecondCardBounds, width)
                     : sameVisualTarget(page, autoFirstTarget, autoFirstCardBounds, width)
                     && sameVisualTarget(page, autoSecondTarget, autoSecondCardBounds, width))) {
-                if (confirmed) completeAutoPair();
+                if (confirmed) completeAutoPair("live_green");
                 else if (faded) confirmFadedPair(page, firstState, secondState, now);
                 else retryPartialPair(root, page, retry);
             }
         } finally {
             root.recycle();
         }
+    }
+
+    private boolean confirmReplacedPair(AccessibilityWordExtractor.Extraction page,
+                                        CardVisualState.State first, CardVisualState.State second, long now) {
+        if (!autoClickBusy || !autoSecondClickIssued) return false;
+        boolean complete = page.isMatchingExercise() && !page.isPauseConfirmationVisible()
+                && !page.isNodeLimitReached() && page.getSelectedWords().isEmpty();
+        if (!replacementPairConfirmation.observe(page.getWords(), autoFirstTarget, autoFirstCardBounds,
+                page.getCardBounds(autoFirstTarget, screenWidth), autoSecondTarget, autoSecondCardBounds,
+                page.getCardBounds(autoSecondTarget, screenWidth), page.isInactive(autoFirstTarget),
+                page.isInactive(autoSecondTarget), first, second, autoPairStartedActive, complete, autoSecondClickAt, now)) return false;
+        completeAutoPair("replacement");
+        return true;
     }
 
     private void confirmFadedPair(AccessibilityWordExtractor.Extraction page,
@@ -3079,7 +3401,7 @@ public final class DuolingoNodeService extends AccessibilityService {
         if (fadedPairConfirmation.observe(first, second, autoPairStartedActive,
                 page.hasActiveControl(autoFirstTarget), page.hasActiveControl(autoSecondTarget),
                 otherActive || isFullySubmittedInactiveBoard(page), completeBoard, autoSecondClickAt, now)) {
-            completeAutoPair();
+            completeAutoPair("faded");
             if (overlay != null) overlay.showStatus("两张词卡已灰化并停用｜继续下一对", MatchOverlayView.STATUS_OK);
         }
     }
@@ -3103,7 +3425,7 @@ public final class DuolingoNodeService extends AccessibilityService {
     private void retryPartialPair(AccessibilityNodeInfo root, AccessibilityWordExtractor.Extraction page,
                                   PartialPairRetry.Action retry) {
         if (!autoClickBusy || !autoSecondClickIssued || visualGestureInFlight || freezeActive
-                || !isAssistEnabled(this) || !isAutoModeEnabled(this)
+                || !isAssistEnabled(this) || !isPairAutomationEnabled(this)
                 || !page.isMatchingExercise() || page.isNodeLimitReached() || page.isPauseConfirmationVisible()
                 || autoFirstCardBounds == null || autoSecondCardBounds == null
                 || !sameVisualTarget(page, autoFirstTarget, autoFirstCardBounds, screenWidth)
@@ -3138,7 +3460,7 @@ public final class DuolingoNodeService extends AccessibilityService {
         long now = SystemClock.uptimeMillis();
         return generation == visualGeneration && !autoClickBusy && autoPairRecovery.isPending()
                 && !freezeActive && !freezeRequestPending && !aiLookupHoldingPause
-                && isAssistEnabled(this) && isAutoModeEnabled(this) && isGreenConfirmationEnabled()
+                && isAssistEnabled(this) && isPairAutomationEnabled(this) && isGreenConfirmationEnabled()
                 && now >= userTakeoverUntil && !manualLearning.hasWork(now, MANUAL_LEARNING_WINDOW_MS)
                 && screenWidth == width && screenHeight == height;
     }
@@ -3152,7 +3474,12 @@ public final class DuolingoNodeService extends AccessibilityService {
         List<MatchPair> candidates = new ArrayList<>();
         List<WordBox> cards = new ArrayList<>();
         // Include suppressed pairs: a stale completion record is one possible reason for the stall.
-        List<MatchPair> known = ExactPairSelector.allExact(matcher.match(page.getWords(), screenWidth));
+        List<MatchPair> known = new ArrayList<>(ExactPairSelector.allExact(
+                matcher.match(page.withoutInactiveWords(page.getWords()), screenWidth)));
+        // Prefer live copies of repeated words; grey copies must not consume their
+        // partners in the one-to-one matcher. Keep the pixel-verified fallback
+        // for genuinely stale accessibility controls.
+        known.addAll(ExactPairSelector.allExact(matcher.match(page.getWords(), screenWidth)));
         for (MatchPair pair : known) {
             if (!visualPairRetry.canRetry(pair)) continue;
             WordBox first = page.getCardBounds(pair.getFirst(), screenWidth);
@@ -3265,16 +3592,17 @@ public final class DuolingoNodeService extends AccessibilityService {
     private void updatePairHighlights(AccessibilityWordExtractor.Extraction page) {
         if (overlay == null || !page.isMatchingExercise() || page.isPauseConfirmationVisible()) return;
         if (page.isNodeLimitReached()) return;
+        List<WordBox> activeWords = page.withoutInactiveWords(page.getWords());
         if (highlightMatcherCache != matcher || highlightWidthCache != screenWidth
-                || !highlightBoardCache.equals(page.getWords())) {
-            highlightMatchesCache = matcher.match(page.getWords(), screenWidth);
-            highlightBoardCache = new ArrayList<>(page.getWords());
+                || !highlightBoardCache.equals(activeWords)) {
+            highlightMatchesCache = matcher.match(activeWords, screenWidth);
+            highlightBoardCache = new ArrayList<>(activeWords);
             highlightMatcherCache = matcher;
             highlightWidthCache = screenWidth;
         }
         List<MatchPair> pairs = highlightMatchesCache;
         // Display follows the visible board, not the shrinking executable queue.
-        overlay.updateHighlights(page.getWords(), isAutoModeEnabled(this)
+        overlay.updateHighlights(page.getWords(), isPairAutomationEnabled(this)
                 ? ExactPairSelector.allExact(pairs) : pairs, !page.isNodeLimitReached());
     }
 
@@ -3294,7 +3622,11 @@ public final class DuolingoNodeService extends AccessibilityService {
         WordBox firstCard = autoFirstCardBounds;
         WordBox secondCard = autoSecondCardBounds;
         if (firstCard == null || secondCard == null) return;
-        if (!canConfirmGreenTargets(page, firstCard, secondCard, screenWidth)) return;
+        if (!canConfirmGreenTargets(page, firstCard, secondCard, screenWidth)
+                && !ReplacementPairConfirmation.replaced(page.getWords(), autoFirstTarget, firstCard,
+                        page.getCardBounds(autoFirstTarget, screenWidth))
+                && !ReplacementPairConfirmation.replaced(page.getWords(), autoSecondTarget, secondCard,
+                        page.getCardBounds(autoSecondTarget, screenWidth))) return;
         final List<DeferredPairConfirmation> capturedDeferred = new ArrayList<>(deferredPairs);
         final List<WordBox> capturedWords = new ArrayList<>(page.getWords());
         final List<WordBox> capturedCards = new ArrayList<>();
@@ -3366,7 +3698,9 @@ public final class DuolingoNodeService extends AccessibilityService {
                 if (!isCurrentVisualPair(generation, width, height)) return;
                 boolean faded = firstState == CardVisualState.State.FADED && secondState == CardVisualState.State.FADED;
                 if (!faded) fadedPairConfirmation.reset();
-                if (!green && !faded && retry == PartialPairRetry.Action.NONE && !selectionRead && deferredStates.isEmpty()) return;
+                boolean mayHaveReplacement = firstState == CardVisualState.State.FADED || secondState == CardVisualState.State.FADED
+                        || firstState == CardVisualState.State.GREEN || secondState == CardVisualState.State.GREEN;
+                if (!green && !faded && !mayHaveReplacement && retry == PartialPairRetry.Action.NONE && !selectionRead && deferredStates.isEmpty()) return;
                 AccessibilityNodeInfo live = getCurrentScreenRoot();
                 if (live == null) return;
                 try {
@@ -3386,12 +3720,13 @@ public final class DuolingoNodeService extends AccessibilityService {
                         fresh = fresh.withVisualSelection(visualBoardSelection.selectedWords(SystemClock.uptimeMillis()));
                         if (recoverUnexpectedSelection(live, fresh)) return;
                     }
+                    if (confirmReplacedPair(fresh, firstState, secondState, SystemClock.uptimeMillis())) return;
                     if (fresh.isMatchingExercise() && !fresh.isNodeLimitReached() && !fresh.isPauseConfirmationVisible()
                             && (green || faded ? canConfirmGreenTargets(fresh, firstCard, secondCard, width)
                             : sameVisualTarget(fresh, autoFirstTarget, firstCard, width)
                             && sameVisualTarget(fresh, autoSecondTarget, secondCard, width))) {
                         if (green) {
-                            completeAutoPair();
+                            completeAutoPair("screenshot_green");
                             if (overlay != null) overlay.showStatus("两张词卡已变绿｜继续下一对", MatchOverlayView.STATUS_OK);
                         } else if (faded) {
                             confirmFadedPair(fresh, firstState, secondState, SystemClock.uptimeMillis());
@@ -3430,16 +3765,8 @@ public final class DuolingoNodeService extends AccessibilityService {
 
     private boolean sameVisualTarget(AccessibilityWordExtractor.Extraction page, WordBox target,
                                      WordBox card, int width) {
-        WordBox currentControl = page.getCardBounds(target, width);
-        if (currentControl != null && !card.equals(currentControl)) return false;
-        // A success control may cease being clickable; its unchanged text still
-        // validates the card rectangle captured before our two clicks.
-        for (WordBox word : page.getWords()) {
-            if (word.getNormalized().equals(target.getNormalized())
-                    && Math.abs(word.getCenterX() - target.getCenterX()) <= 4
-                    && Math.abs(word.getCenterY() - target.getCenterY()) <= 4) return true;
-        }
-        return false;
+        return VisualConfirmationGeometry.matchesVisible(page.getWords(), target, card,
+                page.getCardBounds(target, width));
     }
 
     private boolean canConfirmGreenTargets(AccessibilityWordExtractor.Extraction page,
@@ -3459,6 +3786,7 @@ public final class DuolingoNodeService extends AccessibilityService {
     }
 
     private void cancelAutoClickSequence(boolean scheduleAfterCancel) {
+        replacementPairConfirmation.reset();
         slowPairWasPaused = false;
         dispatchAcceptance.reset();
         fadedPairConfirmation.reset();
@@ -3499,7 +3827,7 @@ public final class DuolingoNodeService extends AccessibilityService {
 
     private boolean maybeStartAiLookup(AccessibilityWordExtractor.Extraction page, boolean prefetch) {
         long now = SystemClock.uptimeMillis();
-        if (!isAutoModeEnabled(this) || !isAssistEnabled(this) || freezeActive
+        if (!isPairAutomationEnabled(this) || !isAssistEnabled(this) || freezeActive
                 || now < userTakeoverUntil || manualLearning.hasWork(now, MANUAL_LEARNING_WINDOW_MS)
                 || !page.isMatchingExercise() || page.isNodeLimitReached() || page.isPauseConfirmationVisible()
                 || !AiMatchSettings.isEnabled(this)) {
@@ -3508,7 +3836,7 @@ public final class DuolingoNodeService extends AccessibilityService {
         }
         pruneIssuedPairs(page.getWords());
         List<WordBox> remaining = wordsWithoutConfirmedPairs(page.getWords());
-        if (FinalPairResolver.hasOnlyPair(remaining, screenWidth)) {
+        if (FinalPairResolver.hasOnlyPair(finalPairWords(page), screenWidth)) {
             aiFailureRecheck.reset();
             return false;
         }
@@ -3572,6 +3900,7 @@ public final class DuolingoNodeService extends AccessibilityService {
         }
         aiLookupInFlight = true;
         aiLookupStartedAt = now;
+        tracePerformance(prefetch ? "ai_prefetch" : "ai_blocking");
         int generation = ++aiLookupGeneration;
         lastAiBoardSignature = signature;
         if (overlay != null) overlay.showStatus(
@@ -3579,9 +3908,13 @@ public final class DuolingoNodeService extends AccessibilityService {
                         + left.size() + "×" + right.size() + " 个候选", MatchOverlayView.STATUS_WORKING);
         AiMatchClient.Call call = new AiMatchClient.Call();
         activeAiCall = call;
+        // Retain the complete request-time board, including temporarily inactive known
+        // partners. Unknown-only payloads omit the evidence needed to reject conflicts.
+        final List<WordBox> requestedBoard = new ArrayList<>(page.getWords());
+        final int requestedWidth = screenWidth;
         activeAiTask = aiExecutor.submit(() -> {
             AiMatchClient.Result result = aiMatchClient.match(settings, left, right, call);
-            handler.post(() -> finishAiLookup(generation, signature, result));
+            handler.post(() -> finishAiLookup(generation, signature, requestedBoard, requestedWidth, result));
         });
         return true;
     }
@@ -3592,11 +3925,14 @@ public final class DuolingoNodeService extends AccessibilityService {
         for (WordBox word : remaining) {
             if (!page.isInactive(word)) active.add(word);
         }
-        // Match the full board before filtering UI state, just as automatic highlighting does.
-        List<MatchPair> visibleMatches = highlightMatcherCache == matcher
-                && highlightWidthCache == screenWidth && highlightBoardCache.equals(page.getWords())
-                ? highlightMatchesCache : matcher.match(page.getWords(), screenWidth);
-        return AiLookupPlan.from(visibleMatches, remaining, active, screenWidth);
+        // Use the same active-card matches as automatic clicking, while retaining full-board
+        // knowledge for partners that are temporarily disabled or finishing their animation.
+        List<MatchPair> activeMatches = highlightMatcherCache == matcher
+                && highlightWidthCache == screenWidth && highlightBoardCache.equals(active)
+                ? highlightMatchesCache : matcher.match(active, screenWidth);
+        List<MatchPair> visibleMatches = page.getWords().equals(active)
+                ? activeMatches : matcher.match(page.getWords(), screenWidth);
+        return AiLookupPlan.from(visibleMatches, activeMatches, remaining, active, screenWidth);
     }
     private List<WordBox> wordsWithoutConfirmedPairs(List<WordBox> currentWords) {
         return wordsWithoutConfirmedPairs(currentWords, true);
@@ -3635,7 +3971,8 @@ public final class DuolingoNodeService extends AccessibilityService {
         return "L:" + normalizedLeft + "|R:" + normalizedRight;
     }
 
-    private void finishAiLookup(int generation, String signature, AiMatchClient.Result result) {
+    private void finishAiLookup(int generation, String signature, List<WordBox> requestedBoard,
+                                int requestedWidth, AiMatchClient.Result result) {
         if (generation != aiLookupGeneration || !aiLookupInFlight) return;
         aiLookupInFlight = false;
         boolean heldPause = aiLookupHoldingPause;
@@ -3645,8 +3982,13 @@ public final class DuolingoNodeService extends AccessibilityService {
         if (!isAssistEnabled(this)) return;
         long now = SystemClock.uptimeMillis();
         if (result.isSuccess()) {
-            int added = 0, usable = 0;
+            int added = 0, usable = 0, conflicts = 0;
             for (AiPairValidator.ValidatedPair pair : result.getPairs()) {
+                if (AiVocabularyAdmission.conflicts(pair.getLeft(), pair.getRight(),
+                        requestedBoard, requestedWidth, vocabulary)) {
+                    conflicts++;
+                    continue;
+                }
                 VocabularyStore.AddResult saved = vocabulary.addAiPair(pair.getLeft(), pair.getRight());
                 if (saved == VocabularyStore.AddResult.ADDED) added++;
                 if (saved == VocabularyStore.AddResult.ADDED || saved == VocabularyStore.AddResult.ALREADY_EXISTS) usable++;
@@ -3656,7 +3998,12 @@ public final class DuolingoNodeService extends AccessibilityService {
             learningNotice = "大模型补词成功｜可用 " + usable + " 对｜新增 " + added + " 对｜"
                     + (now - aiLookupStartedAt) + "ms";
             learningNoticeWarning = false;
-            if (usable == 0) result = AiMatchClient.Result.error("模型已返回，但词库保存失败");
+            String failure = AiVocabularyAdmission.failureReason(added, usable, conflicts);
+            if (!failure.isEmpty()) {
+                android.util.Log.w("WordMatchPerf", "ai_no_progress added=" + added
+                        + " existing=" + usable + " conflicts=" + conflicts);
+                result = AiMatchClient.Result.error(failure);
+            }
         }
         if (!result.isSuccess()) {
             aiLookupBlockedUntil = now + AI_ERROR_COOLDOWN_MS;
@@ -3664,6 +4011,7 @@ public final class DuolingoNodeService extends AccessibilityService {
             learningNotice = "补词未成功｜重新检查本地配对";
             learningNoticeWarning = true;
         }
+        tracePerformance(result.isSuccess() ? "ai_success" : "ai_failure");
         lastAiError = result.isSuccess() ? "" : result.getError();
         lastAiBoardSignature = signature;
         learningNoticeUntil = now + LEARNING_NOTICE_MS;
@@ -3674,7 +4022,7 @@ public final class DuolingoNodeService extends AccessibilityService {
             if (!heldPause) { scheduleRefresh(); return; }
             // A modal hides/disables card nodes. Re-read the unobscured board before deciding
             // that manual help is needed. Local pairs and the final pair retain priority.
-            if (!isAutoModeEnabled(this) || !matchingSessionConfirmed) return;
+            if (!isPairAutomationEnabled(this) || !matchingSessionConfirmed) return;
             if (modeControl != null) modeControl.setAutomatic(true);
             if (freezeActive) finishFreezeAndResume();
             else {
@@ -3806,10 +4154,16 @@ public final class DuolingoNodeService extends AccessibilityService {
 
     private boolean performAutoCardClick(AccessibilityNodeInfo root, AccessibilityWordExtractor.Extraction page,
                                          WordBox target) {
-        // Use the already validated complete page instead of traversing its
-        // entire tree a second time just to find the same clickable parent.
+        // A real enabled card's accessibility action avoids gesture injection and
+        // its completion callback. Both routes retain fresh target / modal checks.
+        if (!visualPairRetry.permits(target, SystemClock.uptimeMillis())
+                && page.hasActiveControl(target) && performNodeClick(root, target)) {
+            tracePerformance("click_node");
+            return true;
+        }
         if (Build.VERSION.SDK_INT >= 24 && page.getCardBounds(target, screenWidth) != null
                 && (page.hasActiveControl(target) || visualPairRetry.permits(target, SystemClock.uptimeMillis()))) {
+            tracePerformance("click_gesture");
             return performVerifiedCardTap(root, page, target);
         }
         return performNodeClick(root, target);
@@ -3829,7 +4183,7 @@ public final class DuolingoNodeService extends AccessibilityService {
     private boolean performVerifiedCardTap(AccessibilityNodeInfo root, AccessibilityWordExtractor.Extraction page,
                                            WordBox target, long durationMs) {
         if (Build.VERSION.SDK_INT < 24 || visualGestureInFlight || !autoClickBusy
-                || !isAssistEnabled(this) || !isAutoModeEnabled(this) || freezeActive
+                || !isAssistEnabled(this) || !isPairAutomationEnabled(this) || freezeActive
                 || !DUOLINGO_PACKAGE.contentEquals(root.getPackageName() == null ? "" : root.getPackageName())) return false;
         WordBox card = page.getCardBounds(target, screenWidth);
         if (!page.isMatchingExercise() || page.isNodeLimitReached() || page.isPauseConfirmationVisible()
@@ -3890,8 +4244,10 @@ public final class DuolingoNodeService extends AccessibilityService {
         if (visualPairRetry.permits(target, SystemClock.uptimeMillis())) {
             return performVerifiedCardTap(root, target);
         }
+        long locateStarted = SystemClock.uptimeMillis();
         NodeCandidate candidate = new NodeCandidate();
         findMatchingNode(root, target, candidate);
+        traceDuration("locate", locateStarted);
         if (candidate.pauseDialogVisible) {
             if (candidate.node != null) {
                 //noinspection deprecation
@@ -3968,23 +4324,20 @@ public final class DuolingoNodeService extends AccessibilityService {
                             screenWidth, screenHeight);
                     pauseDetector.observe(nodeDescription, bounds.left, bounds.top, bounds.right, bounds.bottom,
                             screenWidth, screenHeight);
-                    if (target.getNormalized().equals(WordNormalizer.normalize(nodeText))
-                            || target.getNormalized().equals(WordNormalizer.normalize(nodeDescription))) {
-                        long deltaX = (long) bounds.centerX() - target.getCenterX();
-                        long deltaY = (long) bounds.centerY() - target.getCenterY();
-                        int maximumX = Math.max(32, Math.round(screenWidth * 0.04f));
-                        int maximumY = Math.max(32, Math.round(screenHeight * 0.04f));
-                        if (Math.abs(deltaX) <= maximumX && Math.abs(deltaY) <= maximumY) {
-                            long distance = deltaX * deltaX + deltaY * deltaY;
-                            if (distance < best.distance) {
-                                if (best.node != null) {
-                                    //noinspection deprecation
-                                    best.node.recycle();
-                                }
-                                //noinspection deprecation
-                                best.node = AccessibilityNodeInfo.obtain(node);
-                                best.distance = distance;
-                            }
+                    long deltaX = (long) bounds.centerX() - target.getCenterX();
+                    long deltaY = (long) bounds.centerY() - target.getCenterY();
+                    int maximumX = Math.max(32, Math.round(screenWidth * 0.04f));
+                    int maximumY = Math.max(32, Math.round(screenHeight * 0.04f));
+                    // The complete scan still checks every node for a modal. Only
+                    // nearby text can be this card, so normalize those candidates.
+                    if (Math.abs(deltaX) <= maximumX && Math.abs(deltaY) <= maximumY
+                            && (target.getNormalized().equals(WordNormalizer.normalize(nodeText))
+                            || target.getNormalized().equals(WordNormalizer.normalize(nodeDescription)))) {
+                        long distance = deltaX * deltaX + deltaY * deltaY;
+                        if (distance < best.distance) {
+                            if (best.node != null) best.node.recycle();
+                            best.node = AccessibilityNodeInfo.obtain(node);
+                            best.distance = distance;
                         }
                     }
                     for (int index = 0; index < node.getChildCount(); index++) {

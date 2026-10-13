@@ -117,4 +117,39 @@ public final class AiLookupPlanTest {
         assertTrue(plan.hasLocalPairs());
         assertFalse(plan.request.needsModel());
     }
+    @Test public void greyDuplicateCannotManufactureUnknownActiveTranslation() {
+        WordBox oldApple = word("苹果",100,300);
+        List<WordBox> board = Arrays.asList(oldApple, word("苹果",100,400),
+                word("apple",700,400), word("车费",100,500), word("fare",700,600),
+                word("类似",100,600), word("similar",700,500));
+        List<WordBox> active = board.subList(1, board.size());
+        PairMatcher matcher = matcher("苹果","apple");
+        AiLookupPlan plan = AiLookupPlan.from(matcher.match(board,1000), matcher.match(active,1000),
+                active,active,1000);
+        assertEquals(1,plan.localPairCount);
+        assertEquals(Arrays.asList("车费","类似"),plan.request.left);
+        assertEquals(Arrays.asList("fare","similar"),plan.request.right);
+    }
+
+    @Test public void knownActiveBoardIsNotBlockedByStaleGreyAmbiguity() {
+        List<WordBox> board = Arrays.asList(word("苹果",100,300),word("apple",700,300),
+                word("水",100,400),word("water",700,400),word("旧译",100,500));
+        List<WordBox> active = board.subList(0,4);
+        PairMatcher matcher = matcher("苹果","apple","水","water","旧译","apple");
+        AiLookupPlan plan = AiLookupPlan.from(matcher.match(board,1000), matcher.match(active,1000),
+                active,active,1000);
+        assertEquals(2,plan.localPairCount);
+        assertFalse(plan.request.needsModel());
+        assertTrue(plan.request.left.isEmpty());
+        assertTrue(plan.request.right.isEmpty());
+    }
+
+    @Test public void activeAndWholeBoardKnowledgeCountEachPairOnce() {
+        List<WordBox> board = Arrays.asList(word("苹果",100,300),word("apple",700,300));
+        List<MatchPair> matches = matcher("苹果","apple").match(board,1000);
+        AiLookupPlan plan = AiLookupPlan.from(matches,matches,board,board,1000);
+        assertEquals(1,plan.localPairCount);
+        assertFalse(plan.request.needsModel());
+    }
+
 }

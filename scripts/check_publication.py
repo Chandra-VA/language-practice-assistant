@@ -20,6 +20,7 @@ SECRET = re.compile(rb"(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,
                     rb"sk-[A-Za-z0-9_-]{24,}|AIza[0-9A-Za-z_-]{35}|AKIA[0-9A-Z]{16}|"
                     rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)")
 LOCAL_PATH = re.compile(rb"(?:[A-Za-z]:[\\/]Users[\\/]|/Users/|/home/)[A-Za-z0-9_.-]+")
+PRIVATE_MEMORY_PREFIXES = ("verified_sentences.json", "verified_exercises.json")
 WRAPPER_SHA = "497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7"
 
 
@@ -36,6 +37,8 @@ def main():
             reasons.append("outside publication allowlist")
         if set(item.parts) & BLOCKED_PARTS or item.name in BLOCKED_NAMES or item.suffix.lower() in BLOCKED_SUFFIXES:
             reasons.append("local/private/generated file")
+        if item.name.startswith(PRIVATE_MEMORY_PREFIXES):
+            reasons.append("private answer memory")
         if item.name.startswith(".env") or item.name.startswith("service-account"):
             reasons.append("credential configuration")
         mode = subprocess.check_output(["git", "ls-files", "-s", "--", path], cwd=ROOT).split()[0]

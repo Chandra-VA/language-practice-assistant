@@ -80,4 +80,17 @@ public final class DeferredPairConfirmationTest {
         assertFalse(entry().observeColors(GREEN, GREEN, false, false, true, false, true, 1500));
         assertFalse(entry().observeColors(GREEN, GREEN, false, false, true, true, true, 900));
     }
+    @Test public void asymmetricReplacementAlsoSettlesTheBackgroundConfirmationLane() {
+        DeferredPairConfirmation entry = entry();
+        WordBox newLeft = word("new", 180, 520);
+        List<WordBox> board = Arrays.asList(newLeft, RIGHT, OTHER_LEFT, OTHER_RIGHT);
+        assertFalse(entry.observeReplacement(board, entry.firstCard, entry.secondCard,
+                false, true, READY, FADED, true, 1200));
+        assertTrue(entry.observeReplacement(board, entry.firstCard, entry.secondCard,
+                false, true, READY, FADED, true, 1296));
+        entry.resetObservations(1300);
+        assertFalse(entry.observeReplacement(board, entry.firstCard, entry.secondCard,
+                false, true, READY, FADED, true, 1400));
+    }
+
 }

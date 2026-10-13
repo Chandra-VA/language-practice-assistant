@@ -2,14 +2,19 @@ package com.wordmatch.assist.matching;
 
 import java.text.Normalizer;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /** Normalization shared by accessible text, imported words and learned pairs. */
 public final class WordNormalizer {
+    private static final Pattern LEADING_PUNCTUATION = Pattern.compile("^[\\p{P}]+");
+    private static final Pattern TRAILING_PUNCTUATION = Pattern.compile("[\\p{P}]+$");
+    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
+
     private WordNormalizer() {
     }
 
     public static String normalize(String raw) {
-        if (raw == null) {
+        if (raw == null || raw.isEmpty()) {
             return "";
         }
         String value = Normalizer.normalize(raw, Normalizer.Form.NFKC)
@@ -22,10 +27,9 @@ public final class WordNormalizer {
                 .replace('\u2014', '-')
                 .trim();
 
-        value = value.replaceAll("^[\\p{P}]+", "")
-                .replaceAll("[\\p{P}]+$", "")
-                .replaceAll("\\s+", " ")
-                .trim();
+        value = LEADING_PUNCTUATION.matcher(value).replaceAll("");
+        value = TRAILING_PUNCTUATION.matcher(value).replaceAll("");
+        value = WHITESPACE.matcher(value).replaceAll(" ").trim();
         return value;
     }
 

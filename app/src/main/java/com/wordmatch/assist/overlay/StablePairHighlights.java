@@ -23,10 +23,17 @@ public final class StablePairHighlights {
                 occurrences.put(key, occurrences.containsKey(key) ? occurrences.get(key) + 1 : 1);
             }
         }
+        Map<String, Integer> visibleOccurrences = new HashMap<>();
+        for (WordBox word : words) {
+            String key = word.getNormalized();
+            visibleOccurrences.put(key, visibleOccurrences.getOrDefault(key, 0) + 1);
+        }
         for (int i = entries.size() - 1; i >= 0; i--) {
             Entry entry = entries.get(i);
-            WordBox first = find(words, entry.first, used, occurrences.get(entry.first.getNormalized()) == 1);
-            WordBox second = find(words, entry.second, used, occurrences.get(entry.second.getNormalized()) == 1);
+            WordBox first = find(words, entry.first, used, occurrences.get(entry.first.getNormalized()) == 1
+                    && visibleOccurrences.getOrDefault(entry.first.getNormalized(), 0) == 1);
+            WordBox second = find(words, entry.second, used, occurrences.get(entry.second.getNormalized()) == 1
+                    && visibleOccurrences.getOrDefault(entry.second.getNormalized(), 0) == 1);
             entry.firstVisible = first != null;
             entry.secondVisible = second != null;
             if (first != null) entry.first = first;

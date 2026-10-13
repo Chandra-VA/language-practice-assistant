@@ -23,9 +23,12 @@ public final class TileControlState {
         // Retain the slot geometry for color confirmation, never as click permission.
         if (visible && right - left >= width * 0.25f) {
             cardContainers.add(new WordBox("", left, top, right, bottom));
-            // Wide disabled cards remain inactive when clickability disappears.
-            // Disabled text leaves alone still cannot hide an active card parent.
-            if (!enabled && bottom - top >= height * 0.025f) inactive.add(new WordBox("", left, top, right, bottom));
+            // Some Duolingo versions keep grey cards enabled but remove ACTION_CLICK.
+            // A full-height card with neither clickability nor an active parent is inactive.
+            // Thin text leaves alone still cannot hide an active card parent.
+            if ((!enabled || !clickable) && bottom - top >= height * 0.025f) {
+                inactive.add(new WordBox("", left, top, right, bottom));
+            }
         }
         if (!clickable) return;
         (enabled && visible ? active : inactive).add(new WordBox("", left, top, right, bottom));
@@ -37,6 +40,13 @@ public final class TileControlState {
     }
 
     public boolean hasActiveControl(WordBox word) { return contains(active, word); }
+
+    /** Unknown controls stay in the board; only positively inactive card slots are removed. */
+    public List<WordBox> withoutInactiveWords(List<WordBox> words) {
+        List<WordBox> remaining = new ArrayList<>();
+        for (WordBox word : words) if (!isInactive(word)) remaining.add(word);
+        return remaining;
+    }
 
     /** Only a real wide card control can define an image sampling area. */
     public WordBox cardBounds(WordBox word, int screenWidth) {

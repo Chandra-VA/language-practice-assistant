@@ -37,4 +37,31 @@ public final class VisualConfirmationGeometryTest {
         assertTrue(VisualConfirmationGeometry.matches(Collections.singletonList(SPILL), SPILL, CARD, shiftedCard));
         assertFalse(VisualConfirmationGeometry.matches(Collections.emptyList(), SPILL, CARD, shiftedCard));
     }
+    @Test public void highDensityPressedCardCanReturnSixPixelsToItsRestingPosition() {
+        WordBox pressed = new WordBox("", 42, 734, 508, 923);
+        WordBox resting = new WordBox("", 42, 740, 508, 929);
+        WordBox before = new WordBox("意思", 225, 795, 325, 867);
+        WordBox after = new WordBox("意思", 225, 801, 325, 873);
+        assertTrue(VisualConfirmationGeometry.matches(Collections.singletonList(after), before, pressed, resting));
+        assertFalse(VisualConfirmationGeometry.matches(Collections.emptyList(), before, pressed, resting));
+        assertFalse(VisualConfirmationGeometry.matches(Collections.singletonList(
+                new WordBox("新词", 225, 801, 325, 873)), before, pressed, resting));
+        assertFalse(VisualConfirmationGeometry.matches(Collections.singletonList(
+                new WordBox("意思", 225, 810, 325, 882)), before, pressed, resting));
+    }
+    @org.junit.Test public void clickRetryAcceptsPressReleaseButNeverAnEmptyOrReplacedSlot() {
+        WordBox card = new WordBox("", 30, 740, 510, 929);
+        WordBox target = new WordBox("skill", 200, 800, 300, 860);
+        WordBox pressedCard = new WordBox("", 30, 734, 510, 923);
+        WordBox pressed = new WordBox("skill", 200, 794, 300, 854);
+        org.junit.Assert.assertTrue(VisualConfirmationGeometry.matchesVisible(
+                java.util.Collections.singletonList(pressed), target, card, pressedCard));
+        org.junit.Assert.assertFalse(VisualConfirmationGeometry.matchesVisible(
+                java.util.Collections.emptyList(), target, card, card));
+        org.junit.Assert.assertFalse(VisualConfirmationGeometry.matchesVisible(
+                java.util.Collections.singletonList(new WordBox("other", 200, 800, 300, 860)), target, card, card));
+        org.junit.Assert.assertFalse(VisualConfirmationGeometry.matchesVisible(
+                java.util.Collections.singletonList(new WordBox("skill", 200, 900, 300, 960)), target, card, card));
+    }
+
 }

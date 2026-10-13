@@ -33,8 +33,8 @@ android {
         applicationId = "com.wordmatch.assist"
         minSdk = 23
         targetSdk = 36
-        versionCode = 54
-        versionName = "3.2.23"
+        versionCode = 63
+        versionName = "4.1.0"
 
         testInstrumentationRunner = "android.test.InstrumentationTestRunner"
     }

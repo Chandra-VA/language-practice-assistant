@@ -72,6 +72,17 @@
             android:textSize="14sp" />
 
         <Button
+            android:id="@+id/sentenceMemoryButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_button_secondary"
+            android:text="@string/sentence_memory_title"
+            android:textAllCaps="false"
+            android:textColor="@color/ink"
+            android:textSize="14sp" />
+
+        <Button
             android:id="@+id/addVocabularyPairButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -142,6 +153,32 @@
             android:text="@string/auto_mode_description"
             android:textColor="@color/ink_muted"
             android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/exerciseTypesButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_button_secondary"
+            android:text="自动答题题型开关"
+            android:textColor="@color/ink"
+            android:textSize="16sp" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="5dp"
+            android:text="按题型自由开关；听力和口语有对应按钮时自动跳过。未支持的布局等待手动处理。"
+            android:textColor="@color/ink_muted"
+            android:textSize="13sp" />
+        <Button
+            android:id="@+id/exerciseMemoryButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_button_secondary"
+            android:text="查看其他题型的已学答案"
+            android:textColor="@color/ink"
+            android:textSize="15sp" />
 
         <Switch
             android:id="@+id/aiMatchSwitch"

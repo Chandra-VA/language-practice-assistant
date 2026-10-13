@@ -245,6 +245,10 @@ final class AccessibilityWordExtractor {
 
         boolean hasActiveControl(WordBox word) { return controls.hasActiveControl(word); }
 
+        List<WordBox> withoutInactiveWords(List<WordBox> remaining) {
+            return controls.withoutInactiveWords(remaining);
+        }
+
         WordBox getCardBounds(WordBox word, int screenWidth) {
             return controls.cardBounds(word, screenWidth);
         }

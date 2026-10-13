@@ -2,14 +2,14 @@
     <string name="ai_endpoint_key_changed">接口域名或端口已改变，请重新输入对应密钥；无需密钥时请先清除旧密钥。</string>
     <string name="app_name">极速配词助手</string>
     <string name="title">极速配词助手</string>
-    <string name="subtitle">学习模式记录正确词对，自动模式快速配对并可用大模型补词。</string>
-    <string name="privacy_note">学习和本地配对在手机上完成。自动模式的画面只用于确认词卡状态，不保存、不上传；可随时停止共享。开启大模型补词或点击测试接口时，会向所填 HTTPS 接口发送词语；密钥在本机加密保存。</string>
+    <string name="subtitle">4.1.0 测试版：按题型自动答题，正确答案本地记忆；听力和口语可自动跳过。</string>
+    <string name="privacy_note">学习和本地配对在手机上完成。自动模式的画面只用于确认词卡状态，不保存、不上传；可随时停止共享。开启大模型补词或点击测试接口时，会向所填 HTTPS 接口发送词语，或当前受支持题目的题干、指令、文字选项与输入框数量；密钥在本机加密保存。</string>
     <string name="mode_title">选择运行模式</string>
     <string name="learning_mode_button">启动学习模式</string>
-    <string name="learning_mode_description">只观察并记录你手动完成的正确配对，不自动点击，也不自动暂停。</string>
+    <string name="learning_mode_description">记录你手动提交的正确配对、组句和其他已支持题型答案，不自动点击或暂停。</string>
     <string name="auto_mode_button">启动自动模式</string>
-    <string name="auto_mode_description">优先使用本地词库，未知词可由大模型补全。Android 11+ 授权共享整个屏幕后自动加速；取消共享也能继续答题。</string>
-    <string name="learning_mode_started">学习模式已启动：只记录你的正确配对</string>
+    <string name="auto_mode_description">优先使用本地已验证答案，按题型开关自动答题，陌生题可由大模型补全。Android 11+ 授权共享整个屏幕后自动加速；取消共享也能继续答题。</string>
+    <string name="learning_mode_started">学习模式已启动：记录受支持题型的正确作答</string>
     <string name="auto_mode_started">自动模式已启动：本地词库优先，大模型由下方开关决定</string>
     <string name="auto_capture_skipped">未开启连续画面加速，自动模式已启动</string>
     <string name="status_auto_accelerated">自动模式正在运行：连续画面加速</string>
@@ -32,7 +32,7 @@
     <string name="floating_takeover_description">自动操作需要接管；点击查看具体原因，拖动可以移动</string>
     <string name="floating_takeover_status">剩余词尚未找到可靠配对｜已暂停｜请点橙色“!”悬浮窗接管</string>
     <string name="floating_takeover_started">用户已接管：切换到学习模式并恢复操作</string>
-    <string name="ai_match_mode">自动模式使用大模型补词</string>
+    <string name="ai_match_mode">自动模式使用大模型回答陌生题</string>
     <string name="ai_settings_button">大模型接口设置</string>
     <string name="ai_settings_not_configured">尚未配置接口；快速本地匹配不受影响。</string>
     <string name="ai_settings_summary">%1$s｜%2$s｜模型 %3$s｜超时 %4$dms｜密钥 %5$s</string>
@@ -44,7 +44,7 @@
     <string name="ai_model_hint">模型名（由接口服务商提供）</string>
     <string name="ai_api_key_hint">API 密钥；留空则保留原密钥</string>
     <string name="ai_timeout_hint">超时毫秒（1000–15000）</string>
-    <string name="ai_settings_explanation">支持 Qwen、DeepSeek、OpenAI 和其他兼容 Chat Completions 的接口。仅发送当前题面的未知词列表；模型结果通过屏幕原词、一对一和置信度校验后才会保存并点击。</string>
+    <string name="ai_settings_explanation">支持 Qwen、DeepSeek、OpenAI 和其他兼容 Chat Completions 的接口。按题型发送当前候选词，或题干、指令、词块及文字选项和输入框数量；不发送截图或已有输入框内容。模型结果校验后用于作答，仍可能答错；组句和其他题型在明确答对后才保存为已验证记忆。</string>
     <string name="ai_save">保存设置</string>
     <string name="ai_clear_key">清除密钥</string>
     <string name="ai_settings_saved">大模型设置已保存</string>
@@ -64,11 +64,11 @@
     <string name="stop_assist">停止辅助</string>
     <string name="import_words">导入双语词库 CSV</string>
     <string name="usage_title">使用方法</string>
-    <string name="usage_body">1. 选择学习或自动模式，在系统设置中开启“多邻国节点极速高亮”无障碍服务。若开关被禁用，请先在应用信息允许“受限设置”。\n2. 学习模式记录你手动完成的正确配对，不自动点击或暂停。\n3. 自动模式优先使用本地词库。Android 11+ 按系统提示共享整个屏幕可加速确认；拒绝或停止共享仍能继续自动答题。\n4. 大模型补词默认关闭。配置接口并开启后，自动模式会后台补全未知词，通过校验后保存和使用；最后只剩一对可确认的词卡时直接配对，无需等模型。\n5. 同一组词卡保持固定高亮。悬浮球可切换“学习 / 自动 / 关闭”；模型无法解决且没有可配词对时，点橙色“!”接管。\n6. 已有词库、学习记录、手动添加和导入都保留，修改后立即生效。</string>
+    <string name="usage_body">1. 选择学习或自动模式，在系统设置中开启“多邻国节点极速高亮”无障碍服务。若开关被禁用，请先在应用信息允许“受限设置”。\n2. 在“自动答题题型开关”中勾选题型并保存。学习模式只记录手动答对的题，不自动点击或暂停。\n3. 自动模式优先使用本地词库。Android 11+ 按系统提示共享整个屏幕可加速确认；拒绝或停止共享仍能继续自动答题。\n4. 大模型默认关闭；配置并开启后回答陌生题。限时陌生题尝试暂停等待。听力和口语有对应按钮时自动跳过。\n5. 同一组词卡保持固定高亮。悬浮球可切换“学习 / 自动 / 关闭”；模型无法解决且没有可配词对时，点橙色“!”接管。\n6. 正确答案会本地记忆，可在词库、整句和其他题型三个列表查看或删除；未支持的布局等待手动操作。</string>
     <string name="status_ready">尚未启动</string>
     <string name="status_learning_running">学习模式正在运行：只记录用户操作</string>
     <string name="status_auto_running">自动模式正在运行：本地词库优先</string>
-    <string name="not_matching_page_status">当前不是配对题｜自动点击、大模型和学习均已暂停</string>
+    <string name="not_matching_page_status">当前布局未支持｜等待手动操作</string>
     <string name="vocabulary_loading">本地词库：正在读取</string>
     <string name="vocabulary_count">本地词库共 %1$d 对（内置、导入和已学配对）</string>
     <string name="learned_vocabulary_empty_summary">学习记录：还没有词对；在学习模式中手动完成一个未知正确配对后会出现在这里。</string>
@@ -98,5 +98,9 @@
     <string name="close">关闭</string>
     <string name="node_permission_missing">需要开启“多邻国节点极速高亮”无障碍服务</string>
     <string name="node_service_name">多邻国节点极速高亮</string>
-    <string name="node_service_description">仅在用户选择模式且多邻国位于前台时读取可访问文字和位置。学习模式只记录用户正确操作；自动模式自动点击和暂停，并在支持的设备上临时读取词卡颜色确认状态，不保存或上传画面。用户另行开启大模型补词后，才会向所填接口发送当前未知词文字。</string>
+    <string name="node_service_description">仅在用户选择模式且多邻国位于前台时读取可访问文字和位置。学习模式只记录用户正确操作；自动模式自动点击和暂停，并在支持的设备上临时读取词卡颜色确认状态，不保存或上传画面。用户另行开启大模型补词后，才会向所填接口发送当前未知词，或受支持题目的题干、指令、词块及文字选项和输入框数量。</string>
+    <string name="sentence_memory_title">查看已学整句</string>
+    <string name="sentence_memory_count">查看已学整句（%1$d）</string>
+    <string name="sentence_memory_empty">中译英、英译中的词块组句，在明确答对后记住顺序。重复题优先本地作答；新题需手动作答或启用大模型。点记录可删除。其他题型可在“自动答题题型开关”中选择；已学答案在独立列表中查看。</string>
+    <string name="sentence_memory_delete">删除这条整句记忆？</string>
 </resources>

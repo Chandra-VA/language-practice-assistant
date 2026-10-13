@@ -9,7 +9,13 @@ public final class BurstPausePolicy {
             int visibleBoardWordCount,
             int issuedPairCount
     ) {
-        return visibleBoardWordCount > 2
-                && issuedPairCount > 0;
+        return shouldPauseForReplacementWords(visibleBoardWordCount, issuedPairCount, false);
+    }
+
+    /** Ready means freshly validated, active cards with a safe selected-card plan. */
+    public static boolean shouldPauseForReplacementWords(
+            int visibleBoardWordCount, int issuedPairCount, boolean hasReadyReplacementPair
+    ) {
+        return visibleBoardWordCount > 2 && issuedPairCount > 0 && !hasReadyReplacementPair;
     }
 }

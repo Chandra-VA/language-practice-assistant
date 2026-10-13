@@ -38,6 +38,7 @@ public final class MatchOverlayView extends View {
     private final Paint statusPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint statusTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final float density;
+    private final int[] screenLocation = new int[2];
     private final StablePairHighlights labels = new StablePairHighlights();
     private List<StablePairHighlights.Tile> tiles = Collections.emptyList();
     private List<WordBox> visibleWords = Collections.emptyList();
@@ -49,11 +50,12 @@ public final class MatchOverlayView extends View {
     public MatchOverlayView(Context context) {
         super(context);
         density = getResources().getDisplayMetrics().density;
-        setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        // Draw on the accelerated overlay window; avoid uploading a full-screen
+        // software bitmap on every status/selection update.
+        setLayerType(View.LAYER_TYPE_NONE, null);
 
         outlinePaint.setStyle(Paint.Style.STROKE);
         outlinePaint.setStrokeWidth(3.5f * density);
-        outlinePaint.setShadowLayer(3f * density, 0f, 1f * density, 0x55000000);
 
         highlightPaint.setStyle(Paint.Style.FILL);
         fillPaint.setStyle(Paint.Style.FILL);
@@ -92,6 +94,7 @@ public final class MatchOverlayView extends View {
     }
 
     public void hideMatches() {
+        if (matchesHidden) return;
         matchesHidden = true;
         invalidate();
     }
@@ -118,7 +121,9 @@ public final class MatchOverlayView extends View {
     }
 
     public void showStatus(String message, int color) {
-        statusText = message == null ? "" : message.trim();
+        String next = message == null ? "" : message.trim();
+        if (next.equals(statusText) && statusColor == color) return;
+        statusText = next;
         statusColor = color;
         invalidate();
     }
@@ -130,15 +135,25 @@ public final class MatchOverlayView extends View {
         float radius = 11f * density;
         float badgeRadius = 13f * density;
         int save = canvas.save();
+        // Accessibility bounds / captured pixels use screen coordinates. Overlay windows
+        // can begin below a cutout/status bar even with FLAG_LAYOUT_IN_SCREEN.
+        getLocationOnScreen(screenLocation);
+        canvas.translate(-screenLocation[0], -screenLocation[1]);
         for (WordBox card : samplingCards) {
             if (card == null) continue;
             // Clip only small sample patches; keep every word's marker visible.
             for (int[] point : GreenCardDetector.samplePoints(card)) {
-                float margin = Math.max(3f, 2f * density);
+                // Include up to 8px of press/release movement used by confirmation.
+                float margin = Math.max(12f, 5f * density);
                 //noinspection deprecation
                 canvas.clipRect(point[0] - margin, point[1] - margin,
                         point[0] + margin + 1, point[1] + margin + 1, Region.Op.DIFFERENCE);
             }
+        }
+        for (WordBox word : visibleWords) {
+            // The label itself must remain unpainted so live grey-state sampling
+            // sees Duolingo's glyphs, even under a long colored highlight.
+            canvas.clipRect(word.getLeft(), word.getTop(), word.getRight(), word.getBottom(), Region.Op.DIFFERENCE);
         }
         for (StablePairHighlights.Tile tile : tiles) {
             if (matchesHidden) break;

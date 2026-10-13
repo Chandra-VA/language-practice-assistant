@@ -28,6 +28,10 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.wordmatch.assist.accessibility.DuolingoNodeService;
+import com.wordmatch.assist.sentence.SentenceStore;
+import com.wordmatch.assist.exercise.*;
+import java.util.EnumSet;
+import com.wordmatch.assist.sentence.SentenceMemory;
 import com.wordmatch.assist.ai.AiMatchClient;
 import com.wordmatch.assist.ai.AiMatchSettings;
 import com.wordmatch.assist.ai.AiProvider;
@@ -85,6 +89,9 @@ public final class MainActivity extends Activity {
         aiVocabularyButton.setOnClickListener(ignored -> showAiVocabulary());
         findViewById(R.id.addVocabularyPairButton)
                 .setOnClickListener(ignored -> showAddPairDialog());
+        findViewById(R.id.sentenceMemoryButton).setOnClickListener(ignored -> showSentenceMemory());
+        findViewById(R.id.exerciseTypesButton).setOnClickListener(ignored -> showExerciseTypes());
+        findViewById(R.id.exerciseMemoryButton).setOnClickListener(ignored -> showExerciseMemory());
         updateVocabularyCount();
         findViewById(R.id.learningModeButton)
                 .setOnClickListener(ignored -> beginNodeSetup(AssistMode.LEARNING));
@@ -340,6 +347,8 @@ public final class MainActivity extends Activity {
         if (vocabularyText == null) {
             return;
         }
+        ((Button) findViewById(R.id.sentenceMemoryButton)).setText(getString(R.string.sentence_memory_count,
+                new SentenceStore(this).read().entries().size()));
         VocabularyStore store = new VocabularyStore(this);
         vocabularyText.setText(getString(R.string.vocabulary_count, store.size()));
         List<VocabularyStore.VocabularyPair> learned = store.getLearnedPairsNewestFirst();
@@ -374,6 +383,55 @@ public final class MainActivity extends Activity {
                 learned.size(),
                 preview.toString()
         ));
+    }
+
+    private void showExerciseTypes() {
+        ExerciseType[] types = ExerciseType.values();
+        String[] labels = new String[types.length]; boolean[] checked = new boolean[types.length];
+        EnumSet<ExerciseType> enabled = EnumSet.noneOf(ExerciseType.class);
+        for (int i = 0; i < types.length; i++) {
+            labels[i] = types[i].label; checked[i] = ExerciseSettings.enabled(this, types[i]);
+            if (checked[i]) enabled.add(types[i]);
+        }
+        new AlertDialog.Builder(this).setTitle("选择自动处理的题型")
+                .setMultiChoiceItems(labels, checked, (dialog, index, value) -> {
+                    if (value) enabled.add(types[index]); else enabled.remove(types[index]);
+                }).setNegativeButton("取消", null).setPositiveButton("保存", (dialog, which) -> {
+                    ExerciseSettings.save(this, enabled); DuolingoNodeService.onExerciseSettingsChanged();
+                    Toast.makeText(this, "已启用 " + enabled.size() + " 类；未勾选的题目等待手动操作", Toast.LENGTH_LONG).show();
+                }).show();
+    }
+
+    private void showExerciseMemory() {
+        SentenceStore store = new SentenceStore(this, true);
+        List<SentenceMemory.Entry> entries = store.read().entries();
+        AlertDialog.Builder dialog = new AlertDialog.Builder(this).setTitle("已学会的其他题目（" + entries.size() + "）").setNegativeButton("关闭", null);
+        if (entries.isEmpty()) { dialog.setMessage("选择、填空、阅读、对话和文字输入题在提交并显示答对后保存。配对与翻译组句仍保存在原词库中。").show(); return; }
+        String[] labels = new String[entries.size()];
+        for (int i = 0; i < labels.length; i++) labels[i] = entries.get(i).display().replaceAll("\\n#[0-9a-f]{64}", "");
+        dialog.setItems(labels, (d, i) -> new AlertDialog.Builder(this).setTitle("删除这条记忆？").setMessage(labels[i])
+                .setNegativeButton("取消", null).setPositiveButton("删除", (a, b) -> {
+                    store.remove(entries.get(i).prompt, entries.get(i).words); DuolingoNodeService.onExerciseSettingsChanged(); showExerciseMemory();
+                }).show()).show();
+    }
+
+    private void showSentenceMemory() {
+        SentenceStore store = new SentenceStore(this);
+        List<SentenceMemory.Entry> entries = store.read().entries();
+        AlertDialog.Builder dialog = new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.sentence_memory_count, entries.size())).setNegativeButton(R.string.close, null);
+        if (entries.isEmpty()) { dialog.setMessage(R.string.sentence_memory_empty).show(); return; }
+        CharSequence[] labels = new CharSequence[entries.size()];
+        for (int i = 0; i < entries.size(); i++) labels[i] = entries.get(i).display();
+        dialog.setItems(labels, (ignored, index) -> {
+            SentenceMemory.Entry entry = entries.get(index);
+            new AlertDialog.Builder(this).setTitle(R.string.sentence_memory_delete).setMessage(entry.display())
+                    .setNegativeButton(R.string.cancel, null).setPositiveButton(R.string.delete, (d, w) -> {
+                        boolean deleted = store.remove(entry.prompt, entry.words);
+                        updateVocabularyCount();
+                        Toast.makeText(this, deleted ? R.string.pair_deleted : R.string.pair_delete_failed, Toast.LENGTH_SHORT).show();
+                    }).show();
+        }).show();
     }
 
     private void showLearnedVocabulary() {

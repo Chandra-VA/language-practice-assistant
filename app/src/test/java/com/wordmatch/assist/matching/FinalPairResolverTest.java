@@ -212,4 +212,26 @@ public final class FinalPairResolverTest {
     private static WordBox box(String text, int x, int y) {
         return new WordBox(text, x, y, x + 120, y + 50);
     }
+    @Test public void filteredRemainderCannotHideOtherActivePartners() {
+        WordBox resume = box("简历",100,300), interview = box("interview",700,300);
+        List<WordBox> active = Arrays.asList(resume,interview,box("面试",100,400),box("résumé",700,400));
+        List<WordBox> filtered = Arrays.asList(resume,interview);
+        List<WordBox> candidate = FinalPairResolver.unsubmittedFinalPair(active,filtered);
+        FinalPairResolver resolver = new FinalPairResolver();
+        assertNull(resolver.observe(candidate,WIDTH,true,1000));
+        assertNull(resolver.observe(candidate,WIDTH,true,1300));
+        assertFalse(resolver.hasCandidate());
+    }
+
+    @Test public void alreadySubmittedActiveCardCannotEnterUnknownTailInference() {
+        assertTrue(FinalPairResolver.unsubmittedFinalPair(FINAL_PAIR,Collections.singletonList(LEFT)).isEmpty());
+    }
+
+    @Test public void trueUnknownTailStillResolvesAfterGreyCardsAreExcluded() {
+        List<WordBox> candidate = FinalPairResolver.unsubmittedFinalPair(FINAL_PAIR,FINAL_PAIR);
+        FinalPairResolver resolver = new FinalPairResolver();
+        assertNull(resolver.observe(candidate,WIDTH,true,1000));
+        assertNotNull(resolver.observe(candidate,WIDTH,true,1200));
+    }
+
 }

@@ -3,6 +3,7 @@ package com.wordmatch.assist.matching;
 import com.wordmatch.assist.model.MatchPair;
 import com.wordmatch.assist.model.WordBox;
 
+import java.util.Collections;
 import java.util.List;
 
 /** Resolves the last remaining left/right pair without requiring a dictionary entry. */
@@ -74,6 +75,13 @@ public final class FinalPairResolver {
 
     public boolean hasCandidate() {
         return candidateLeft != null;
+    }
+
+    /** Submission filtering must never make a larger active board look like a lone pair. */
+    public static List<WordBox> unsubmittedFinalPair(List<WordBox> activeWords, List<WordBox> unsubmittedWords) {
+        if (activeWords == null || unsubmittedWords == null || activeWords.size() != 2
+                || !unsubmittedWords.containsAll(activeWords)) return Collections.emptyList();
+        return activeWords;
     }
 
     /** Shape check only. After dismissing a dialog, observe() must still verify stability. */
