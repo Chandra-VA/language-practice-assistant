@@ -68,8 +68,8 @@ AI 为可选功能，支持兼容 Chat Completions 的 HTTPS 接口。开启后�
 需要 **JDK 17、Android SDK Platform 36、Build Tools 36.0.0**。最低运行版本为 Android 6.0（API 23）；屏幕共享加速入口要求 Android 11+。Gradle Wrapper 固定为 9.5.0，Android Gradle Plugin 固定为 9.3.0。
 
 ```sh
-git clone https://github.com/Chandra-VA/wordmatch-assist.git
-cd wordmatch-assist
+git clone https://github.com/Chandra-VA/language-practice-assistant.git
+cd language-practice-assistant
 ./gradlew :app:testDebugUnitTest :app:assembleDebug
 ```
 
